@@ -1,0 +1,14 @@
+[Unit]
+Description=TVHelper Web Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/home/hermes/.hermes/profiles/tvhelper-web/.venv/bin/python3 /home/hermes/.hermes/profiles/tvhelper-web/app.py
+Restart=on-failure
+RestartSec=5
+User=hermes
+WorkingDirectory=/home/hermes/.hermes/profiles/tvhelper-web
+
+[Install]
+WantedBy=default.target
