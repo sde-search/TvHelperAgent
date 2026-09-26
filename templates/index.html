@@ -550,11 +550,21 @@
             checkVRAM();
         });
 
-        applyBtn.addEventListener('click', () => {
+        applyBtn.addEventListener('click', async () => {  // async added
             currentModel = modelSelect.value;
             localStorage.setItem('tvhelper_model', currentModel);
             document.getElementById('current-model-label').textContent = '→ ' + currentModel;
             checkVRAM();
+            // Принудительно загружаем модель в VRAM (выгрузит старую)
+            try {
+                await fetch('/api/activate-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: currentModel })
+                });
+                // Обновим статус через 2с, чтобы nvidia-smi успел переключиться
+                setTimeout(refreshStatus, 2000);
+            } catch(e) { /* ignore */ }
             // Визуальный фидбек
             applyBtn.style.background = 'var(--accent)';
             applyBtn.textContent = '✅';

@@ -184,6 +184,28 @@ async def system_status():
     return status
 
 
+@app.post("/api/activate-model")
+async def activate_model(body: dict):
+    """Принудительно загрузить модель в VRAM (вытесняет предыдущую)."""
+    model = body.get("model", "")
+    if not model:
+        return {"error": "Model required"}
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post("http://localhost:11434/api/generate", json={
+                "model": model,
+                "prompt": "",  # пустой промпт — только load/unload
+                "stream": False,
+                "keep_alive": "10m",
+                "options": {"num_ctx": 16384}
+            })
+        if r.status_code == 200:
+            return {"ok": True, "model": model}
+        return {"error": f"ollama returned {r.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/api/search")
 async def search_only(body: dict):
     query = body.get("query", "").strip()
