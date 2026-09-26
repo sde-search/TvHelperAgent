@@ -296,6 +296,7 @@
                 <span class="status-item" id="gpu-status"><span class="status-dot err"></span>GPU</span>
                 <span class="status-item" id="ollama-status"><span class="status-dot err"></span>Ollama</span>
                 <span class="status-item" id="search-status"><span class="status-dot err"></span>Search</span>
+                <span class="status-item" id="vram-warning" style="display:none; background: rgba(255,100,50,.15); border-color: #f64;"><span class="status-dot err"></span>⚠️ VRAM</span>
             </div>
             <button id="export-btn" class="btn btn-sm" title="Экспорт диалога">📥</button>
             <button id="help-btn" class="btn btn-sm" title="Справка по настройкам">❓</button>
@@ -364,6 +365,12 @@
                 <div class="help-section">
                     <h4>📥 Экспорт диалога</h4>
                     <p>Скачать всю историю чата в Markdown-файл.</p>
+                </div>
+                <div class="help-section">
+                    <h4>⚠️ VRAM — предупреждение в статус-баре</h4>
+                    <p>Если выбранная модель с текущим контекстом не влезает в видеопамять — в статус-баре появляется <strong>⚠️ VRAM</strong>.</p>
+                    <p>При наведении — подсказка: сколько VRAM нужно модели и сколько свободно. Если предупреждение активно — возможны тормоза из-за выгрузки слоёв на CPU.</p>
+                    <p>Расчёт приблизительный для Q4-моделей. Облачные провайдеры не проверяются.</p>
                 </div>
             </div>
         </div>
@@ -501,6 +508,7 @@
                 opt.value = m.name;
                 opt.textContent = m.name + (m.size ? ' (' + formatSize(m.size) + ')' : '');
                 if (m.max_output) opt.dataset.maxOutput = m.max_output;
+                if (m.vram_estimate_mb) opt.dataset.vramMb = m.vram_estimate_mb;
                 modelSelect.appendChild(opt);
             });
             if (prevModel && prov.models.find(m => m.name === prevModel)) {
@@ -538,12 +546,38 @@
 
         modelSelect.addEventListener('change', () => {
             updateTokensSlider();
+            checkVRAM();
         });
 
         applyBtn.addEventListener('click', () => {
             currentModel = modelSelect.value;
             localStorage.setItem('tvhelper_model', currentModel);
+            checkVRAM();
         });
+
+        // === VRAM check ===
+        function checkVRAM() {
+            const opt = modelSelect.selectedOptions[0];
+            const warnEl = document.getElementById('vram-warning');
+            if (!opt || !opt.dataset.vramMb || !warnEl) {
+                if (warnEl) warnEl.style.display = 'none';
+                return;
+            }
+            const needed = parseInt(opt.dataset.vramMb, 10);
+            // Берём свежую инфу из GPU-статуса (обновляется каждые 5с)
+            const gpuEl = document.getElementById('gpu-status');
+            const match = gpuEl?.title?.match(/^(\d+\.?\d*)\/(\d+\.?\d*)GB/);
+            if (!match) { warnEl.style.display = 'none'; return; }
+            const totalGb = parseFloat(match[2]);
+            const freeMb = (totalGb - parseFloat(match[1])) * 1024;
+            const freeGb = freeMb / 1024;
+            if (needed > freeMb) {
+                warnEl.style.display = 'flex';
+                warnEl.title = `⚠️ Модели нужно ~${(needed/1024).toFixed(1)}GB VRAM, свободно ${freeGb.toFixed(1)}GB. Ответы могут тормозить из-за выгрузки на CPU.`;
+            } else {
+                warnEl.style.display = 'none';
+            }
+        }
 
         // === System status ===
         async function refreshStatus() {
@@ -554,6 +588,7 @@
                     s.gpu ? `${(s.gpu.used_mb/1024).toFixed(1)}/${(s.gpu.total_mb/1024).toFixed(1)}GB ${s.gpu.util_pct}%` : '—');
                 updateStatusItem('ollama-status', s.ollama, 'Ollama');
                 updateStatusItem('search-status', s.search, 'Search');
+                checkVRAM(); // перепроверить с актуальными цифрами GPU
             } catch(e) { /* ignore */ }
         }
 

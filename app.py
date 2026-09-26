@@ -131,7 +131,8 @@ async def list_models():
                     entry["models"].append({
                         "name": name,
                         "size": m.get("size", 0),
-                        "max_output": max_out
+                        "max_output": max_out,
+                        "vram_estimate_mb": _estimate_vram_mb(m.get("size", 0), max_out)
                     })
             except Exception as e:
                 entry["error"] = str(e)
@@ -140,9 +141,18 @@ async def list_models():
                 mname = mname.strip()
                 if mname:
                     max_out = MODEL_MAX_OUTPUT_OVERRIDES.get(mname, DEFAULT_MAX_OUTPUT)
-                    entry["models"].append({"name": mname, "max_output": max_out})
+                    entry["models"].append({"name": mname, "max_output": max_out, "vram_estimate_mb": 0})
         result["providers"].append(entry)
     return result
+
+
+def _estimate_vram_mb(model_size_bytes: int, num_ctx: int) -> int:
+    """Примерная оценка требуемой VRAM для модели (в MB).
+    Веса + KV-кеш (грубая прикидка для Qwen/Llama/Gemma в Q4)."""
+    model_mb = model_size_bytes / (1024 * 1024)
+    # KV-кеш ~ 1 байт на параметр на токен при Q4, упрощённо:
+    kv_overhead = model_mb * 0.3 * (num_ctx / 16384)
+    return int(model_mb + kv_overhead)
 
 
 @app.get("/api/status")
