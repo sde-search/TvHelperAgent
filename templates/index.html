@@ -230,6 +230,44 @@
             .header { flex-direction: column; align-items: stretch; }
             .header-controls { justify-content: center; }
         }
+
+        /* Help Modal */
+        .help-modal {
+            position: fixed; inset: 0; z-index: 1000;
+            background: rgba(0,0,0,0.6);
+            display: flex; align-items: center; justify-content: center;
+            backdrop-filter: blur(2px);
+        }
+        .help-modal-content {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; max-width: 560px; width: 90%;
+            max-height: 80vh; display: flex; flex-direction: column;
+        }
+        .help-modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px 20px; border-bottom: 1px solid var(--border);
+        }
+        .help-modal-title { font-size: 16px; font-weight: 600; }
+        .help-close {
+            background: none; border: none; color: var(--text-dim);
+            font-size: 24px; cursor: pointer; padding: 0 4px;
+        }
+        .help-close:hover { color: var(--text); }
+        .help-modal-body {
+            padding: 16px 20px 20px; overflow-y: auto;
+            font-size: 13px; line-height: 1.6;
+        }
+        .help-section { margin-bottom: 16px; }
+        .help-section:last-child { margin-bottom: 0; }
+        .help-section h4 { font-size: 14px; color: var(--accent); margin-bottom: 4px; }
+        .help-section p { color: var(--text-dim); margin-bottom: 4px; }
+        .help-section ul { list-style: none; padding: 0; }
+        .help-section ul li { padding: 1px 0 1px 14px; position: relative; color: var(--text-dim); }
+        .help-section ul li::before { content: '·'; position: absolute; left: 2px; color: var(--text-dim); }
+        .help-section code {
+            background: var(--surface2); padding: 1px 5px;
+            border-radius: 3px; font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -261,6 +299,73 @@
                 <span class="status-item" id="search-status"><span class="status-dot err"></span>Search</span>
             </div>
             <button id="export-btn" class="btn btn-sm" title="Экспорт диалога">📥</button>
+            <button id="help-btn" class="btn btn-sm" title="Справка по настройкам">❓</button>
+        </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="help-modal" style="display:none;">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <span class="help-modal-title">❓ О настройках</span>
+                <button id="help-close" class="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div class="help-section">
+                    <h4>🔢 K — количество чанков</h4>
+                    <p>Сколько фрагментов документации будет найдено поиском и передано модели как контекст.</p>
+                    <ul>
+                        <li><strong>1–3</strong> — быстрый ответ, мало контекста</li>
+                        <li><strong>5–7</strong> — оптимально (по умолчанию 5)</li>
+                        <li><strong>10–20</strong> — больше контекста, но модель может «размазать» внимание</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>🌡️ temp — температура</h4>
+                    <p>Насколько «креативной» будет модель. Выше — больше вариативности, ниже — строже и фактологичнее.</p>
+                    <ul>
+                        <li><strong>0.0–0.2</strong> — строго по фактам, почти без вариаций (для точных ответов)</li>
+                        <li><strong>0.3–0.5</strong> — сбалансировано (по умолчанию 0.3)</li>
+                        <li><strong>0.7–1.0</strong> — творческий режим, может придумывать</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>📝 токенов — макс. длина ответа</h4>
+                    <p>Максимум токенов, которые модель может выдать за один ответ. 1 токен ≈ 1 слово или часть слова.</p>
+                    <ul>
+                        <li><strong>512–1024</strong> — краткие ответы</li>
+                        <li><strong>2048</strong> — оптимально (по умолчанию)</li>
+                        <li><strong>4096</strong> — для развёрнутых ответов</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>🏷️ Провайдер</h4>
+                    <p>Откуда брать модель для ответа. Настраивается на сервере в файле <code>.env</code>.</p>
+                    <ul>
+                        <li><strong>Локальная (Ollama)</strong> — ваша видеокарта, свои модели, бесплатно</li>
+                        <li><strong>OpenAI / Polza / DeepSeek / OpenRouter</strong> — внешние API, нужен ключ в .env</li>
+                        <li><strong>Anthropic (Claude)</strong> — Claude через API, нужен ключ в .env</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>🤖 Модель</h4>
+                    <p>Конкретная модель выбранного провайдера. Для локального Ollama показываются все установленные модели (кроме <code>nomic-embed-text</code>).</p>
+                    <p>🔒 — кнопка <strong>замка</strong> фиксирует выбранную модель, чтобы автообновление списка её не сбросило.</p>
+                </div>
+                <div class="help-section">
+                    <h4>📊 Статус-бар</h4>
+                    <p>🟢 = сервис работает, 🔴 = недоступен.</p>
+                    <ul>
+                        <li><strong>GPU</strong> — занято/всего памяти на видеокарте</li>
+                        <li><strong>Ollama</strong> — запущен ли локальный Ollama</li>
+                        <li><strong>Search</strong> — работает ли поисковый сервер RAG (pdf-rag)</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>📥 Экспорт диалога</h4>
+                    <p>Скачать всю историю чата в Markdown-файл.</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -288,6 +393,9 @@
         const kInput = document.getElementById('k-input');
         const lockBtn = document.getElementById('lock-btn');
         const exportBtn = document.getElementById('export-btn');
+        const helpBtn = document.getElementById('help-btn');
+        const helpModal = document.getElementById('help-modal');
+        const helpClose = document.getElementById('help-close');
         const tempSlider = document.getElementById('temp-slider');
         const tempVal = document.getElementById('temp-val');
         const tokensSlider = document.getElementById('tokens-slider');
@@ -743,6 +851,22 @@
             a.download = 'tvhelper-dialog.md';
             a.click();
             URL.revokeObjectURL(url);
+        });
+
+        // === Help modal ===
+        helpBtn.addEventListener('click', () => {
+            helpModal.style.display = 'flex';
+        });
+        helpClose.addEventListener('click', () => {
+            helpModal.style.display = 'none';
+        });
+        helpModal.addEventListener('click', (e) => {
+            if (e.target === helpModal) helpModal.style.display = 'none';
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && helpModal.style.display === 'flex') {
+                helpModal.style.display = 'none';
+            }
         });
 
         // === Clear chat (double-click header) ===
