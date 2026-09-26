@@ -250,8 +250,10 @@
                 <input type="range" id="tokens-slider" min="256" max="4096" step="128" value="2048">
                 <span class="slider-value" id="tokens-val">2048</span>
             </div>
+            <label for="provider-select">Провайдер:</label>
+            <select id="provider-select" class="model-select"><option>Загрузка...</option></select>
             <label for="model-select">Модель:</label>
-            <select id="model-select" class="model-select"><option>Загрузка...</option></select>
+            <select id="model-select" class="model-select"><option>—</option></select>
             <button id="lock-btn" class="lock-btn" title="Зафиксировать модель">🔒</button>
             <div class="status-bar" id="status-bar">
                 <span class="status-item" id="gpu-status"><span class="status-dot err"></span>GPU</span>
@@ -281,6 +283,7 @@
         const input = document.getElementById('question-input');
         const sendBtn = document.getElementById('send-btn');
         const cancelBtn = document.getElementById('cancel-btn');
+        const providerSelect = document.getElementById('provider-select');
         const modelSelect = document.getElementById('model-select');
         const kInput = document.getElementById('k-input');
         const lockBtn = document.getElementById('lock-btn');
@@ -349,24 +352,51 @@
             try {
                 const resp = await fetch('/api/models');
                 const data = await resp.json();
-                modelsList = data.models || [];
-                const prevModel = modelLocked ? currentModel : modelSelect.value;
-                modelSelect.innerHTML = '';
-                modelsList.forEach(m => {
+
+                // Provider select
+                providerSelect.innerHTML = '';
+                data.providers.forEach(p => {
                     const opt = document.createElement('option');
-                    opt.value = m.name;
-                    opt.textContent = m.name + ' (' + formatSize(m.size) + ')';
-                    modelSelect.appendChild(opt);
+                    opt.value = p.id;
+                    opt.textContent = p.label;
+                    providerSelect.appendChild(opt);
                 });
-                if (prevModel && modelsList.find(m => m.name === prevModel)) {
-                    modelSelect.value = prevModel;
-                } else if (data.default && modelsList.find(m => m.name === data.default)) {
-                    modelSelect.value = data.default;
-                } else if (modelsList.length > 0) {
-                    modelSelect.value = modelsList[0].name;
+
+                // Apply saved provider
+                const savedProvider = localStorage.getItem('tvhelper_provider');
+                const savedModel = localStorage.getItem('tvhelper_model');
+                if (savedProvider && data.providers.find(p => p.id === savedProvider)) {
+                    providerSelect.value = savedProvider;
+                } else if (data.default_provider) {
+                    providerSelect.value = data.default_provider;
                 }
-                currentModel = modelSelect.value;
+
+                // Initial model population
+                popModels(data, savedModel);
+                providerSelect.addEventListener('change', () => popModels(data, null));
             } catch(e) { /* ignore */ }
+        }
+
+        function popModels(data, savedModel) {
+            const pid = providerSelect.value;
+            const prov = data.providers.find(p => p.id === pid);
+            if (!prov) return;
+            const prevModel = modelLocked ? currentModel : (savedModel || modelSelect.value);
+            modelSelect.innerHTML = '';
+            prov.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name + (m.size ? ' (' + formatSize(m.size) + ')' : '');
+                modelSelect.appendChild(opt);
+            });
+            if (prevModel && prov.models.find(m => m.name === prevModel)) {
+                modelSelect.value = prevModel;
+            } else if (data.default_model && prov.models.find(m => m.name === data.default_model)) {
+                modelSelect.value = data.default_model;
+            } else if (prov.models.length > 0) {
+                modelSelect.value = prov.models[0].name;
+            }
+            currentModel = modelSelect.value;
         }
 
         function formatSize(bytes) {
@@ -375,6 +405,11 @@
             return gb >= 1 ? gb.toFixed(1) + 'GB' : (bytes / (1024**2)).toFixed(0) + 'MB';
         }
 
+        providerSelect.addEventListener('change', () => {
+            localStorage.setItem('tvhelper_provider', providerSelect.value);
+            currentModel = modelSelect.value;
+        });
+
         modelSelect.addEventListener('change', () => {
             if (modelLocked) {
                 modelLocked = false;
@@ -382,6 +417,7 @@
                 lockBtn.textContent = '🔒';
             }
             currentModel = modelSelect.value;
+            localStorage.setItem('tvhelper_model', currentModel);
         });
 
         lockBtn.addEventListener('click', () => {
@@ -564,6 +600,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         question: question,
+                        provider: providerSelect.value,
                         model: currentModel,
                         k: k,
                         temperature: temperature,
