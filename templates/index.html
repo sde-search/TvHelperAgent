@@ -292,6 +292,7 @@
             <label for="model-select">Модель:</label>
             <select id="model-select" class="model-select"><option>—</option></select>
             <button id="apply-btn" class="btn btn-sm apply-btn" title="Применить выбранную модель">OK</button>
+            <span id="current-model-label" class="model-label" style="font-size:11px;color:var(--text-dim);margin-left:4px;"></span>
             <div class="status-bar" id="status-bar">
                 <span class="status-item" id="gpu-status"><span class="status-dot err"></span>GPU</span>
                 <span class="status-item" id="ollama-status"><span class="status-dot err"></span>Ollama</span>
@@ -552,7 +553,15 @@
         applyBtn.addEventListener('click', () => {
             currentModel = modelSelect.value;
             localStorage.setItem('tvhelper_model', currentModel);
+            document.getElementById('current-model-label').textContent = '→ ' + currentModel;
             checkVRAM();
+            // Визуальный фидбек
+            applyBtn.style.background = 'var(--accent)';
+            applyBtn.textContent = '✅';
+            setTimeout(() => {
+                applyBtn.textContent = 'OK';
+                applyBtn.style.background = '';
+            }, 1200);
         });
 
         // === VRAM check ===
@@ -598,6 +607,9 @@
             const dot = el.querySelector('.status-dot');
             dot.className = 'status-dot ' + (ok ? 'ok' : 'err');
             el.title = label;
+            // Показываем значение в тексте (GPU: память/использование)
+            const textNode = el.childNodes[el.childNodes.length - 1];
+            if (textNode) textNode.textContent = ' ' + label;
         }
 
         // === Chat functions ===
@@ -928,6 +940,10 @@
         renderHistory();
         loadModels();
         refreshStatus();
+        // Показать текущую модель после загрузки
+        setTimeout(() => {
+            if (currentModel) document.getElementById('current-model-label').textContent = '→ ' + currentModel;
+        }, 200);
         setInterval(loadModels, 30000);
         setInterval(refreshStatus, 10000);
     </script>
