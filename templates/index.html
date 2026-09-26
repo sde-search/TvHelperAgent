@@ -52,13 +52,12 @@
             padding: 5px 8px; font-size: 12px; cursor: pointer; min-width: 120px;
         }
         .model-select:focus { outline: none; border-color: var(--accent); }
-        .lock-btn {
-            background: var(--surface2); color: var(--text-dim);
-            border: 1px solid var(--border); border-radius: var(--radius);
-            padding: 5px 8px; font-size: 13px; cursor: pointer; transition: all 0.15s;
+        .apply-btn {
+            background: var(--accent); color: #fff;
+            border: 1px solid var(--accent); border-radius: var(--radius);
+            padding: 5px 10px; font-size: 13px; cursor: pointer; font-weight: 600; transition: all 0.15s;
         }
-        .lock-btn:hover { border-color: var(--accent); color: var(--text); }
-        .lock-btn.locked { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .apply-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 
         /* Status bar */
         .status-bar {
@@ -292,7 +291,7 @@
             <select id="provider-select" class="model-select"><option>Загрузка...</option></select>
             <label for="model-select">Модель:</label>
             <select id="model-select" class="model-select"><option>—</option></select>
-            <button id="lock-btn" class="lock-btn" title="Зафиксировать модель">🔒</button>
+            <button id="apply-btn" class="btn btn-sm apply-btn" title="Применить выбранную модель">OK</button>
             <div class="status-bar" id="status-bar">
                 <span class="status-item" id="gpu-status"><span class="status-dot err"></span>GPU</span>
                 <span class="status-item" id="ollama-status"><span class="status-dot err"></span>Ollama</span>
@@ -351,7 +350,7 @@
                 <div class="help-section">
                     <h4>🤖 Модель</h4>
                     <p>Конкретная модель выбранного провайдера. Для локального Ollama показываются все установленные модели (кроме <code>nomic-embed-text</code>).</p>
-                    <p>🔒 — кнопка <strong>замка</strong> фиксирует выбранную модель, чтобы автообновление списка её не сбросило.</p>
+                    <p><strong>OK</strong> — применить выбранную модель к чату.</p>
                 </div>
                 <div class="help-section">
                     <h4>📊 Статус-бар</h4>
@@ -386,13 +385,12 @@
     <script>
         // === DOM refs ===
         const chat = document.getElementById('chat');
-        const input = document.getElementById('question-input');
-        const sendBtn = document.getElementById('send-btn');
-        const cancelBtn = document.getElementById('cancel-btn');
-        const providerSelect = document.getElementById('provider-select');
-        const modelSelect = document.getElementById('model-select');
-        const kInput = document.getElementById('k-input');
-        const lockBtn = document.getElementById('lock-btn');
+                const input = document.getElementById('question-input');
+                const sendBtn = document.getElementById('send-btn');
+                const cancelBtn = document.getElementById('cancel-btn');
+                const providerSelect = document.getElementById('provider-select');
+                const modelSelect = document.getElementById('model-select');
+                const applyBtn = document.getElementById('apply-btn');
         const exportBtn = document.getElementById('export-btn');
         const helpBtn = document.getElementById('help-btn');
         const helpModal = document.getElementById('help-modal');
@@ -405,7 +403,6 @@
         let abortController = null;
         let currentModel = '';
         let modelsList = [];
-        let modelLocked = false;
         let history = []; // {role, content, sources?, metrics?}
 
         // === Sliders ===
@@ -482,17 +479,22 @@
                     providerSelect.value = data.default_provider;
                 }
 
-                // Initial model population
-                popModels(data, savedModel);
-                providerSelect.addEventListener('change', () => popModels(data, null));
+                // Initial model population (apply immediately — use saved or first)
+                popModels(data, savedModel, true);
             } catch(e) { /* ignore */ }
         }
 
-        function popModels(data, savedModel) {
+        // Provider change handler — only added once
+        providerSelect.addEventListener('change', () => {
+            localStorage.setItem('tvhelper_provider', providerSelect.value);
+            popModels(modelsData, null, false);
+        });
+
+        function popModels(data, savedModel, applyImmediate) {
             const pid = providerSelect.value;
             const prov = data.providers.find(p => p.id === pid);
             if (!prov) return;
-            const prevModel = modelLocked ? currentModel : (savedModel || modelSelect.value);
+            const prevModel = savedModel || modelSelect.value;
             modelSelect.innerHTML = '';
             prov.models.forEach(m => {
                 const opt = document.createElement('option');
@@ -508,7 +510,7 @@
             } else if (prov.models.length > 0) {
                 modelSelect.value = prov.models[0].name;
             }
-            currentModel = modelSelect.value;
+            if (applyImmediate) currentModel = modelSelect.value;
             updateTokensSlider();
         }
 
@@ -534,27 +536,13 @@
             return gb >= 1 ? gb.toFixed(1) + 'GB' : (bytes / (1024**2)).toFixed(0) + 'MB';
         }
 
-        providerSelect.addEventListener('change', () => {
-            localStorage.setItem('tvhelper_provider', providerSelect.value);
-            currentModel = modelSelect.value;
-        });
-
         modelSelect.addEventListener('change', () => {
-            if (modelLocked) {
-                modelLocked = false;
-                lockBtn.classList.remove('locked');
-                lockBtn.textContent = '🔒';
-            }
-            currentModel = modelSelect.value;
-            localStorage.setItem('tvhelper_model', currentModel);
             updateTokensSlider();
         });
 
-        lockBtn.addEventListener('click', () => {
-            modelLocked = !modelLocked;
-            lockBtn.classList.toggle('locked', modelLocked);
-            lockBtn.textContent = modelLocked ? '🔓' : '🔒';
-            lockBtn.title = modelLocked ? 'Разблокировать модель' : 'Зафиксировать модель';
+        applyBtn.addEventListener('click', () => {
+            currentModel = modelSelect.value;
+            localStorage.setItem('tvhelper_model', currentModel);
         });
 
         // === System status ===
