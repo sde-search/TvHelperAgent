@@ -335,8 +335,9 @@
                     <ul>
                         <li><strong>512–1024</strong> — краткие ответы</li>
                         <li><strong>2048</strong> — оптимально (по умолчанию)</li>
-                        <li><strong>4096</strong> — для развёрнутых ответов</li>
+                        <li><strong>4096+</strong> — для развёрнутых ответов</li>
                     </ul>
+                    <p>⚡ Максимум слайдера <strong>автоматически подстраивается</strong> под выбранную модель: локальные Ollama-модели до 16384, облачные API — до указанных провайдером лимитов.</p>
                 </div>
                 <div class="help-section">
                     <h4>🏷️ Провайдер</h4>
@@ -456,10 +457,12 @@
         }
 
         // === Load models ===
+        let modelsData = null;
         async function loadModels() {
             try {
                 const resp = await fetch('/api/models');
                 const data = await resp.json();
+                modelsData = data;
 
                 // Provider select
                 providerSelect.innerHTML = '';
@@ -495,6 +498,7 @@
                 const opt = document.createElement('option');
                 opt.value = m.name;
                 opt.textContent = m.name + (m.size ? ' (' + formatSize(m.size) + ')' : '');
+                if (m.max_output) opt.dataset.maxOutput = m.max_output;
                 modelSelect.appendChild(opt);
             });
             if (prevModel && prov.models.find(m => m.name === prevModel)) {
@@ -505,6 +509,23 @@
                 modelSelect.value = prov.models[0].name;
             }
             currentModel = modelSelect.value;
+            updateTokensSlider();
+        }
+
+        function updateTokensSlider() {
+            const opt = modelSelect.selectedOptions[0];
+            if (!opt || !opt.dataset.maxOutput) return;
+            const maxOut = parseInt(opt.dataset.maxOutput, 10);
+            const slider = document.getElementById('tokens-slider');
+            const curVal = parseInt(slider.value, 10);
+            const newMax = Math.min(maxOut, 65536);
+            slider.max = newMax;
+            // Подгоняем step под разрядность
+            slider.step = newMax <= 2048 ? 128 : 256;
+            if (curVal > newMax) {
+                slider.value = newMax;
+                document.getElementById('tokens-val').textContent = newMax;
+            }
         }
 
         function formatSize(bytes) {
@@ -526,6 +547,7 @@
             }
             currentModel = modelSelect.value;
             localStorage.setItem('tvhelper_model', currentModel);
+            updateTokensSlider();
         });
 
         lockBtn.addEventListener('click', () => {

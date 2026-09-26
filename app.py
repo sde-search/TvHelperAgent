@@ -32,7 +32,16 @@ _load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI(title="TVHelper Web Agent")
 
-# === Настройки ===
+# === Дефолтный макс. вывод по модели (можно переопределить в .env) ===
+# Формат: MODEL_MAX_OUTPUT = {"gpt-4o": 16384, "deepseek-chat": 8192, ...}
+_MODEL_MAX_OUTPUT_STR = os.getenv("MODEL_MAX_OUTPUT", "")
+MODEL_MAX_OUTPUT_OVERRIDES = {}
+if _MODEL_MAX_OUTPUT_STR:
+    for part in _MODEL_MAX_OUTPUT_STR.split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            MODEL_MAX_OUTPUT_OVERRIDES[k.strip()] = int(v.strip())
+DEFAULT_MAX_OUTPUT = int(os.getenv("DEFAULT_MAX_OUTPUT", "16384"))
 SEARCH_URL = os.getenv("SEARCH_URL", "http://localhost:11436/search")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.3"))
 DEFAULT_NUM_PREDICT = int(os.getenv("DEFAULT_NUM_PREDICT", "2048"))
@@ -112,14 +121,26 @@ async def list_models():
                     name = m["name"]
                     if name == "nomic-embed-text":
                         continue
-                    entry["models"].append({"name": name, "size": m.get("size", 0)})
+                    # Для Ollama берём num_ctx из модели или дефолт
+                    model_info = m.get("model_info", {})
+                    ctx = (
+                        model_info.get("llama.context_length") or
+                        16384
+                    )
+                    max_out = MODEL_MAX_OUTPUT_OVERRIDES.get(name, ctx)
+                    entry["models"].append({
+                        "name": name,
+                        "size": m.get("size", 0),
+                        "max_output": max_out
+                    })
             except Exception as e:
                 entry["error"] = str(e)
         else:
             for mname in p["models"]:
                 mname = mname.strip()
                 if mname:
-                    entry["models"].append({"name": mname})
+                    max_out = MODEL_MAX_OUTPUT_OVERRIDES.get(mname, DEFAULT_MAX_OUTPUT)
+                    entry["models"].append({"name": mname, "max_output": max_out})
         result["providers"].append(entry)
     return result
 
