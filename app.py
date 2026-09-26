@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""TVHelper Web Agent — минимальный RAG-агент с веб-интерфейсом."""
+"""TVHelper Web Agent — RAG-агент с веб-интерфейсом."""
 
 import json
+import subprocess
 from pathlib import Path
 
 import httpx
@@ -18,6 +19,7 @@ SEARCH_URL = "http://localhost:11436/search"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 DEFAULT_MODEL = "qwen3:8b"
 SEARCH_K = 5
+ENABLED_MODELS = ["qwen3:8b"]
 
 
 # === API endpoints ===
@@ -40,16 +42,60 @@ async def list_models():
         models = []
         for m in data.get("models", []):
             name = m["name"]
-            # Показываем только чат-модели (не эмбеддинги)
-            if "embed" not in name.lower():
-                models.append({
-                    "name": name,
-                    "size": m.get("size", 0),
-                    "modified": m.get("modified_at", ""),
-                })
+            # Показываем только разрешённые чат-модели
+            if name not in ENABLED_MODELS:
+                continue
+            models.append({
+                "name": name,
+                "size": m.get("size", 0),
+                "modified": m.get("modified_at", ""),
+            })
         return {"models": models, "default": DEFAULT_MODEL}
     except Exception as e:
         return {"models": [], "default": DEFAULT_MODEL, "error": str(e)}
+
+
+@app.get("/api/status")
+async def system_status():
+    """Статус-бар: GPU, Ollama, search_server."""
+    status = {"gpu": {}, "ollama": False, "search": False}
+
+    # GPU
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            parts = result.stdout.strip().split(", ")
+            if len(parts) == 3:
+                used, total, util = parts
+                status["gpu"] = {
+                    "used_mb": int(used),
+                    "total_mb": int(total),
+                    "util_pct": int(util),
+                }
+    except Exception:
+        status["gpu"] = {"error": "nvidia-smi failed"}
+
+    # Ollama
+    try:
+        async with httpx.AsyncClient(timeout=3) as c:
+            r = await c.get("http://localhost:11434/api/tags")
+            status["ollama"] = r.status_code == 200
+    except Exception:
+        status["ollama"] = False
+
+    # Search server
+    try:
+        async with httpx.AsyncClient(timeout=3) as c:
+            r = await c.get("http://localhost:11436/health")
+            status["search"] = r.status_code == 200
+    except Exception:
+        status["search"] = False
+
+    return status
 
 
 @app.post("/api/search")
@@ -83,6 +129,10 @@ async def chat(body: dict):
 
     if not question:
         return {"error": "Question is required"}
+
+    # Запрещаем запросы к отключённым моделям
+    if model not in ENABLED_MODELS:
+        return {"error": f"Model '{model}' is disabled. Available: {', '.join(ENABLED_MODELS)}"}
 
     # 1. Поиск по RAG-базе
     try:
@@ -124,9 +174,11 @@ async def chat(body: dict):
         "model": model,
         "messages": messages,
         "stream": True,
+        "keep_alive": -1,  # Держать модель в памяти постоянно — иначе первый запрос грузит 5GB и рвёт соединение через cloudflared
         "options": {
             "temperature": 0.3,
             "num_predict": 2048,
+            "num_ctx": 16384,
         },
     }
 
