@@ -15,6 +15,12 @@
 - **Кнопка справки** ❓ — описание всех настроек
 - **Статус-бар**: GPU, Ollama, search_server
 - **Тёмная тема**
+- **Защита от повторной отправки** — `sending` guard блокирует двойной Enter
+- **Cancel стрима** — кнопка ⏹ прерывает генерацию через `AbortController`
+- **История диалога** в localStorage — кап 50 сообщений, при превышении квоты — тримминг до 20
+- **Кнопка очистки чата** 🗑️ (также двойной клик по заголовку)
+- **Копирование ответа** с fallback: `navigator.clipboard` → `execCommand('copy')` для WireGuard/не-HTTPS
+- **marked.js локально** — не зависит от CDN, работает офлайн
 
 ## Быстрый старт
 
@@ -43,9 +49,10 @@ cloudflared tunnel --url http://localhost:8080
 |----------|-------|----------|
 | `/` | GET | Веб-интерфейс |
 | `/api/models` | GET | Список провайдеров и их моделей (с `max_output`, `vram_estimate_mb`) |
-| `/api/chat` | POST | RAG + LLM (SSE-поток) |
-| `/api/search` | POST | Только поиск по RAG |
+| `/api/chat` | POST | RAG + LLM (SSE-поток). Валидирует: question (max 8192), k (int 1–20), temperature (0–2), num_predict (1–131072), history (list), model (str 1–256) |
+| `/api/search` | POST | Только поиск по RAG. Валидирует query (max 8192), k (1–20) |
 | `/api/status` | GET | Статус GPU, Ollama, search_server |
+| `/api/activate-model` | POST | Принудительная загрузка модели в Ollama. Валидирует model (str, non-empty, max 256) |
 
 ## Провайдеры LLM
 
@@ -67,7 +74,16 @@ cloudflared tunnel --url http://localhost:8080
 - **Провайдер** — откуда брать модель (локальная / облачная)
 - **Модель** — выбор из списка + кнопка **OK** для применения
 - **⚠️ VRAM** — предупреждение в статус-баре, если модель с текущим контекстом не влезает в видеопамять (наведение показывает детали)
+- **🗑️** — очистка чата (подтверждение)
 - **Статус-бар** 🟢/🔴 — GPU, Ollama, Search, VRAM
+
+## Ошибки Ollama
+
+Дифференцируются по типу:
+- **Timeout** — Ollama не ответил за 120 с
+- **404** — модель не найдена (название в сообщении)
+- **ConnectError** — Ollama не запущен
+- **ReadError** — разрыв соединения при стриме
 
 ## Зависимости
 
