@@ -525,6 +525,12 @@
                 opt.textContent = m.name + (m.size ? ' (' + formatSize(m.size) + ')' : '');
                 if (m.max_output) opt.dataset.maxOutput = m.max_output;
                 if (m.vram_estimate_mb) opt.dataset.vramMb = m.vram_estimate_mb;
+                if (m.presets) {
+                    opt.dataset.presetsTemp = m.presets.temperature;
+                    opt.dataset.presetsNumPredict = m.presets.num_predict;
+                    opt.dataset.presetsK = m.presets.k;
+                    opt.dataset.presetsNumCtx = m.presets.num_ctx;
+                }
                 modelSelect.appendChild(opt);
             });
             if (prevModel && prov.models.find(m => m.name === prevModel)) {
@@ -536,6 +542,7 @@
             }
             if (applyImmediate) currentModel = modelSelect.value;
             updateTokensSlider();
+            applyPresets();
         }
 
         function updateTokensSlider() {
@@ -560,9 +567,42 @@
             return gb >= 1 ? gb.toFixed(1) + 'GB' : (bytes / (1024**2)).toFixed(0) + 'MB';
         }
 
+        function applyPresets() {
+            const opt = modelSelect.selectedOptions[0];
+            if (!opt || !opt.dataset.presetsTemp) return;
+
+            // Температура
+            const presetsTemp = parseFloat(opt.dataset.presetsTemp);
+            const sliderVal = Math.round(presetsTemp * 10);
+            tempSlider.value = Math.min(Math.max(sliderVal, parseInt(tempSlider.min)), parseInt(tempSlider.max));
+            tempVal.textContent = presetsTemp.toFixed(1);
+
+            // K
+            const presetsK = parseInt(opt.dataset.presetsK, 10);
+            if (!isNaN(presetsK)) {
+                kInput.value = presetsK;
+            }
+
+            // Token slider: ставим на рекомендованные, но в рамках max контекста
+            const presetsNumPredict = parseInt(opt.dataset.presetsNumPredict, 10);
+            if (!isNaN(presetsNumPredict)) {
+                const maxOut = parseInt(opt.dataset.maxOutput, 10) || 16384;
+                const newMax = Math.min(maxOut, 65536);
+                tokensSlider.max = newMax;
+                tokensSlider.step = newMax <= 2048 ? 128 : 256;
+                const clamped = Math.min(Math.max(presetsNumPredict, parseInt(tokensSlider.min)), newMax);
+                tokensSlider.value = clamped;
+                tokensVal.textContent = clamped;
+            }
+
+            // Сохраняем num_ctx для отправки
+            localStorage.setItem('tvhelper_num_ctx', opt.dataset.presetsNumCtx || '8192');
+        }
+
         modelSelect.addEventListener('change', () => {
             updateTokensSlider();
             checkVRAM();
+            applyPresets();
         });
 
         applyBtn.addEventListener('click', async () => {  // async added
@@ -818,6 +858,7 @@
                         k: k,
                         temperature: temperature,
                         num_predict: numPredict,
+                        num_ctx: parseInt(localStorage.getItem('tvhelper_num_ctx') || '8192', 10),
                         history: historyMsgs,
                     }),
                     signal: abortController.signal,

@@ -134,18 +134,19 @@ async def list_models():
                     name = m["name"]
                     if name == "nomic-embed-text":
                         continue
-                    # Для Ollama берём num_ctx из модели или дефолт
                     model_info = m.get("model_info", {})
                     ctx = (
                         model_info.get("llama.context_length") or
                         16384
                     )
                     max_out = MODEL_MAX_OUTPUT_OVERRIDES.get(name, ctx)
+                    model_size = m.get("size", 0)
                     entry["models"].append({
                         "name": name,
-                        "size": m.get("size", 0),
+                        "size": model_size,
                         "max_output": max_out,
-                        "vram_estimate_mb": _estimate_vram_mb(m.get("size", 0), max_out)
+                        "vram_estimate_mb": _estimate_vram_mb(model_size, max_out),
+                        "presets": _recommend_presets(model_size, max_out, is_ollama=True)
                     })
             except Exception as e:
                 entry["error"] = str(e)
@@ -154,7 +155,7 @@ async def list_models():
                 mname = mname.strip()
                 if mname:
                     max_out = MODEL_MAX_OUTPUT_OVERRIDES.get(mname, DEFAULT_MAX_OUTPUT)
-                    entry["models"].append({"name": mname, "max_output": max_out, "vram_estimate_mb": 0})
+                    entry["models"].append({"name": mname, "max_output": max_out, "vram_estimate_mb": 0, "presets": _recommend_presets(0, max_out, is_ollama=False)})
         result["providers"].append(entry)
     return result
 
@@ -166,6 +167,62 @@ def _estimate_vram_mb(model_size_bytes: int, num_ctx: int) -> int:
     # KV-кеш ~ 1 байт на параметр на токен при Q4, упрощённо:
     kv_overhead = model_mb * 0.3 * (num_ctx / 16384)
     return int(model_mb + kv_overhead)
+
+
+def _get_gpu_total_mb() -> int:
+    """Общий объём VRAM в MB."""
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5)
+        if r.returncode == 0:
+            return int(r.stdout.strip())
+    except Exception:
+        pass
+    return 12288  # fallback RTX 3060
+
+
+def _recommend_presets(model_size_bytes: int, max_output: int, is_ollama: bool = True) -> dict:
+    """Рекомендованные параметры для модели-справочного агента с учётом железа."""
+    # Температура: минимальная для фактологичных RAG-ответов
+    rec_temperature = 0.1
+
+    # K: сколько чанков — зависит от доступного контекста
+    if max_output <= 8192:
+        rec_k = 3
+    elif max_output <= 16384:
+        rec_k = 5
+    else:
+        rec_k = 7
+
+    # num_predict: ~20% от max_output, но не меньше 1024 и не больше 16384
+    rec_num_predict = min(max(1024, int(max_output * 0.2 / 100) * 100), 16384)
+
+    # num_ctx: баланс между контекстным окном и VRAM
+    if is_ollama and model_size_bytes > 0:
+        total_vram_mb = _get_gpu_total_mb()
+        model_mb = model_size_bytes / (1024 * 1024)
+        usable_vram = total_vram_mb * 0.9  # 10% запас для системы
+        if model_mb >= usable_vram:
+            rec_num_ctx = 4096  # модель едва влезает — минимум контекста
+        else:
+            kv_budget = usable_vram - model_mb
+            kv_per_token = (model_mb * 0.3) / 16384
+            if kv_per_token > 0:
+                max_safe_ctx = int(kv_budget / kv_per_token)
+            else:
+                max_safe_ctx = 32768
+            rec_num_ctx = min(max(4096, max_safe_ctx), max_output, 32768)
+            rec_num_ctx = max(4096, (rec_num_ctx // 1024) * 1024)
+    else:
+        rec_num_ctx = min(max_output, 16384)
+
+    return {
+        "temperature": rec_temperature,
+        "num_predict": rec_num_predict,
+        "k": rec_k,
+        "num_ctx": rec_num_ctx,
+    }
 
 
 @app.get("/api/status")
@@ -253,6 +310,7 @@ async def chat(body: dict):
     k = body.get("k", 5)
     temperature = body.get("temperature", DEFAULT_TEMPERATURE)
     num_predict = body.get("num_predict", DEFAULT_NUM_PREDICT)
+    num_ctx = body.get("num_ctx", DEFAULT_NUM_CTX)
     history = body.get("history", [])
 
     if not question:
@@ -315,7 +373,7 @@ async def chat(body: dict):
     async def generate():
         yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
         if provider["type"] == "ollama":
-            async for chunk in _stream_ollama(provider, model, messages, temperature, num_predict):
+            async for chunk in _stream_ollama(provider, model, messages, temperature, num_predict, num_ctx):
                 yield chunk
         elif provider["type"] == "openai":
             async for chunk in _stream_openai(provider, model, messages, temperature, num_predict):
@@ -341,8 +399,10 @@ async def chat(body: dict):
 # ======================= Stream handlers =======================
 
 
-async def _stream_ollama(provider, model, messages, temperature, num_predict):
+async def _stream_ollama(provider, model, messages, temperature, num_predict, num_ctx=None):
     url = f"{provider['base_url']}/api/chat"
+    if num_ctx is None:
+        num_ctx = DEFAULT_NUM_CTX
     payload = {
         "model": model,
         "messages": messages,
@@ -351,7 +411,7 @@ async def _stream_ollama(provider, model, messages, temperature, num_predict):
         "options": {
             "temperature": temperature,
             "num_predict": num_predict,
-            "num_ctx": DEFAULT_NUM_CTX,
+            "num_ctx": num_ctx,
         },
     }
     try:
