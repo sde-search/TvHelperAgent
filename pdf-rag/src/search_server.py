@@ -17,6 +17,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # — Paths
@@ -25,8 +26,23 @@ DATA_DIR = BASE_DIR / "data"
 PDFS_DIR = DATA_DIR / "pdfs"
 CHROMA_DIR = DATA_DIR / "chroma"
 HASH_CACHE = CHROMA_DIR / "file_hashes.json"
+EXTRACTED_DIR = DATA_DIR / "extracted"
 PDFS_DIR.mkdir(parents=True, exist_ok=True)
+EXTRACTED_DIR.mkdir(parents=True, exist_ok=True)
 VENV_PYTHON = sys.executable  # runs from .venv, so this is the venv python
+
+
+# — Helper: get images for a source file
+def get_images_for_source(source_name: str, page_number: int | None = None) -> list[str]:
+    """Возвращает список URL картинок для указанного source и опционально — страницы."""
+    source_stem = Path(source_name).stem
+    img_dir = EXTRACTED_DIR / source_stem
+    if not img_dir.exists():
+        return []
+    pattern = f"page*_img*.png"
+    if page_number is not None:
+        pattern = f"page{page_number}_img*.png"
+    return [f"/extracted/{source_stem}/{f.name}" for f in sorted(img_dir.glob(pattern))]
 
 # — Логирование поисковых запросов
 LOG_DIR = BASE_DIR / "data" / "logs"
@@ -75,6 +91,8 @@ if cors_origins_env == "*":
     cors_origins = ["*"]
 else:
     cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
+app.mount("/extracted", StaticFiles(directory=str(EXTRACTED_DIR)), name="extracted")
 
 app.add_middleware(
     CORSMiddleware,
@@ -154,6 +172,13 @@ async def search(
     docs = hs.search(query, k=k, product_filter=product)
     elapsed = int((time.time() - t0) * 1000)
     log_search(query, product, len(docs), elapsed)
+
+    # Обогащаем результаты ссылками на картинки
+    for d in docs:
+        d["images"] = get_images_for_source(
+            d.get("source", ""),
+            page_number=d.get("page", None),
+        )
 
     return {
         "query": query,
