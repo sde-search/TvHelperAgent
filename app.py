@@ -225,6 +225,45 @@ def _recommend_presets(model_size_bytes: int, max_output: int, is_ollama: bool =
     }
 
 
+# === Query Rewrite ===
+REWRITE_MODEL = os.getenv("REWRITE_MODEL", "")
+
+
+async def _rewrite_query(question: str, history: list, ollama_url: str, model: str) -> str:
+    """Переформулирует вопрос в самостоятельный поисковый запрос на основе истории диалога."""
+    if not history:
+        return question
+    recent = history[-4:] if len(history) >= 4 else history
+    history_text = "\n".join(
+        f"{'Пользователь' if m['role'] == 'user' else 'Ассистент'}: {m.get('content', '')[:200]}"
+        for m in recent
+    )
+    prompt = (
+        "На основе истории диалога преобразуй последний вопрос пользователя "
+        "в самостоятельный поисковый запрос (1-3 слова).\n\n"
+        f"{history_text}\n\n"
+        "Поисковый запрос:"
+    )
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "options": {"num_predict": 60, "temperature": 0, "num_ctx": 2048},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{ollama_url}/api/chat", json=payload)
+            r.raise_for_status()
+            data = r.json()
+            rewritten = data.get("message", {}).get("content", "").strip()
+            if rewritten:
+                logger.info(f"→ rewrite: '{question}' → '{rewritten}'")
+                return rewritten
+    except Exception as e:
+        logger.warning(f"rewrite failed: {e}")
+    return question
+
+
 @app.get("/api/status")
 async def system_status():
     status = {"gpu": {}, "ollama": False, "search": False}
@@ -334,10 +373,14 @@ async def chat(body: dict):
     if not provider:
         return {"error": f"Provider '{provider_id}' not found"}
 
+    # Query rewrite: переформулируем вопрос с учётом истории (той же моделью)
+    ollama_url = provider.get("base_url", "http://localhost:11434") if provider["type"] == "ollama" else "http://localhost:11434"
+    search_query = await _rewrite_query(question, history, ollama_url, model)
+
     # RAG search
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(SEARCH_URL, params={"query": question, "k": k})
+            r = await c.get(SEARCH_URL, params={"query": search_query, "k": k})
             r.raise_for_status()
             search_data = r.json()
     except Exception as e:
@@ -373,6 +416,16 @@ async def chat(body: dict):
     messages.extend(history)
     if not history or history[-1].get("content") != question:
         messages.append({"role": "user", "content": user_content})
+
+    # Динамический token budgeting: вычитаем размер входного промпта из num_ctx
+    all_text = sum(len(m.get("content", "")) for m in messages)
+    input_tokens_est = max(1, all_text // 4)
+    token_budget = num_ctx - input_tokens_est - 300
+    token_budget = max(128, min(num_predict, token_budget))
+    if token_budget < num_predict:
+        logger.info(f"→ budget: num_ctx={num_ctx}, input≈{input_tokens_est} токенов, " +
+                     f"num_predict урезан {num_predict}→{token_budget}")
+    num_predict = token_budget
 
     async def generate():
         yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
@@ -427,9 +480,13 @@ async def _stream_ollama(provider, model, messages, temperature, num_predict, nu
                         continue
                     try:
                         chunk = json.loads(line)
-                        if chunk.get("message", {}).get("content"):
-                            content = chunk["message"]["content"]
+                        msg = chunk.get("message", {})
+                        content = msg.get("content", "")
+                        thinking = msg.get("thinking", "")
+                        if content:
                             yield f"data: {json.dumps({'type': 'token', 'data': content}, ensure_ascii=False)}\n\n"
+                        elif thinking:
+                            yield f"data: {json.dumps({'type': 'thinking', 'data': thinking}, ensure_ascii=False)}\n\n"
                         if chunk.get("done", False):
                             done_data = {
                                 "total_duration": chunk.get("total_duration", 0),
