@@ -66,6 +66,16 @@
             align-items: center;
             font-size: 11px;
         }
+        .ctx-badge {
+            font-size: 11px;
+            color: var(--text-dim);
+            background: rgba(255,255,255,.05);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            white-space: nowrap;
+            line-height: 24px;
+        }
         .status-item {
             display: flex;
             align-items: center;
@@ -287,6 +297,7 @@
                 <input type="range" id="tokens-slider" min="256" max="4096" step="128" value="2048">
                 <span class="slider-value" id="tokens-val">2048</span>
             </div>
+            <span class="ctx-badge" id="ctx-badge" title="Контекстное окно модели">ctx: —</span>
             <label for="provider-select">Провайдер:</label>
             <select id="provider-select" class="model-select"><option>Загрузка...</option></select>
             <label for="model-select">Модель:</label>
@@ -596,7 +607,10 @@
             }
 
             // Сохраняем num_ctx для отправки
-            localStorage.setItem('tvhelper_num_ctx', opt.dataset.presetsNumCtx || '8192');
+            const numCtx = parseInt(opt.dataset.presetsNumCtx, 10);
+            localStorage.setItem('tvhelper_num_ctx', numCtx || '8192');
+            // Показываем num_ctx в UI
+            document.getElementById('ctx-badge').textContent = 'ctx: ' + (numCtx || 8192);
         }
 
         modelSelect.addEventListener('change', () => {
@@ -609,6 +623,7 @@
             currentModel = modelSelect.value;
             localStorage.setItem('tvhelper_model', currentModel);
             document.getElementById('current-model-label').textContent = '→ ' + currentModel;
+            applyPresets();
             checkVRAM();
             // Принудительно загружаем модель в VRAM (выгрузит старую)
             try {
