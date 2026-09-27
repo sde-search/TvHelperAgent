@@ -48,8 +48,8 @@ cloudflared tunnel --url http://localhost:8080
 | Endpoint | Метод | Описание |
 |----------|-------|----------|
 | `/` | GET | Веб-интерфейс |
-| `/api/models` | GET | Список провайдеров и их моделей (с `max_output`, `vram_estimate_mb`) |
-| `/api/chat` | POST | RAG + LLM (SSE-поток). Валидирует: question (max 8192), k (int 1–20), temperature (0–2), num_predict (1–131072), history (list), model (str 1–256) |
+| `/api/models` | GET | Список провайдеров и их моделей (с `max_output`, `vram_estimate_mb`, `presets`) |
+| `/api/chat` | POST | RAG + LLM (SSE-поток). Валидирует: question (max 8192), k (int 1–20), temperature (0–2), num_predict (1–131072), num_ctx (int, по модели), history (list), model (str 1–256) |
 | `/api/search` | POST | Только поиск по RAG. Валидирует query (max 8192), k (1–20) |
 | `/api/status` | GET | Статус GPU, Ollama, search_server |
 | `/api/activate-model` | POST | Принудительная загрузка модели в Ollama. Валидирует model (str, non-empty, max 256) |
@@ -75,6 +75,7 @@ cloudflared tunnel --url http://localhost:8080
 - **Модель** — выбор из списка + кнопка **OK** для применения
 - **⚠️ VRAM** — предупреждение в статус-баре, если модель с текущим контекстом не влезает в видеопамять (наведение показывает детали)
 - **🗑️** — очистка чата (подтверждение)
+- **Автоматические presets** — при выборе модели автоматом выставляются: температура (0.1), K (5), num_ctx (под модель), num_predict. Значения подобраны под роль справочного агента и ограничения VRAM GPU (RTX 3060 12GB)
 - **Статус-бар** 🟢/🔴 — GPU, Ollama, Search, VRAM
 
 ## Ошибки Ollama
