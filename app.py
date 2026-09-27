@@ -354,21 +354,24 @@ async def chat(body: dict):
         sources.append({"source": source, "product": product, "score": round(score, 3)})
         context_parts.append(f"[Source: {source} (product: {product}, score: {score})]\n{text}")
 
-    context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant context found."
+    context = "\n\n---\n\n".join(context_parts) if context_parts else "Нет релевантного контекста."
 
     system_prompt = (
         "Ты — технический ассистент поддержки. У тебя есть база знаний технической документации.\n"
-        "Отвечай на вопрос пользователя ТОЛЬКО на основе предоставленного контекста. "
+        "Отвечай на вопрос пользователя ТОЛЬКО на основе предоставленного контекста.\n"
         "Если контекста недостаточно — так и скажи.\n"
         "Обязательно указывай имя файла-источника и название продукта.\n"
-        "Отвечай КРАТКО и ПО СУЩЕСТВУ.\n"
-        f"Контекст:\n{context}"
+        "Отвечай КРАТКО и ПО СУЩЕСТВУ."
     )
+
+    # Контекст в user message (не в system), чтобы все модели видели документы
+    # Qwen, Gemma, Llama, Phi, DeepSeek — все стабильно читают контекст из последнего user сообщения
+    user_content = f"Контекст:\n{context}\n\n---\n\nИспользуя ТОЛЬКО контекст выше, ответь на вопрос:\n{question}"
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     if not history or history[-1].get("content") != question:
-        messages.append({"role": "user", "content": question})
+        messages.append({"role": "user", "content": user_content})
 
     async def generate():
         yield f"data: {json.dumps({'type': 'sources', 'data': sources}, ensure_ascii=False)}\n\n"
