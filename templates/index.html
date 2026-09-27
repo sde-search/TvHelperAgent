@@ -393,12 +393,13 @@
     <script>
         // === DOM refs ===
         const chat = document.getElementById('chat');
-                const input = document.getElementById('question-input');
-                const sendBtn = document.getElementById('send-btn');
-                const cancelBtn = document.getElementById('cancel-btn');
-                const providerSelect = document.getElementById('provider-select');
-                const modelSelect = document.getElementById('model-select');
-                const applyBtn = document.getElementById('apply-btn');
+        const input = document.getElementById('question-input');
+        const kInput = document.getElementById('k-input');
+        const sendBtn = document.getElementById('send-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
+        const providerSelect = document.getElementById('provider-select');
+        const modelSelect = document.getElementById('model-select');
+        const applyBtn = document.getElementById('apply-btn');
         const exportBtn = document.getElementById('export-btn');
         const helpBtn = document.getElementById('help-btn');
         const helpModal = document.getElementById('help-modal');
@@ -588,11 +589,12 @@
             const match = gpuEl?.title?.match(/^(\d+\.?\d*)\/(\d+\.?\d*)GB/);
             if (!match) { warnEl.style.display = 'none'; return; }
             const totalGb = parseFloat(match[2]);
-            const freeMb = (totalGb - parseFloat(match[1])) * 1024;
-            const freeGb = freeMb / 1024;
-            if (needed > freeMb) {
+            const totalMb = totalGb * 1024;
+            // Предупреждение если модели нужно больше 90% от общего объёма VRAM
+            // (модель может быть уже загружена, поэтому сравниваем с total, а не free)
+            if (needed > totalMb * 0.90) {
                 warnEl.style.display = 'flex';
-                warnEl.title = `⚠️ Модели нужно ~${(needed/1024).toFixed(1)}GB VRAM, свободно ${freeGb.toFixed(1)}GB. Ответы могут тормозить из-за выгрузки на CPU.`;
+                warnEl.title = `⚠️ Модели нужно ~${(needed/1024).toFixed(1)}GB из ${totalGb.toFixed(1)}GB VRAM — может не поместиться.`;
             } else {
                 warnEl.style.display = 'none';
             }

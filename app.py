@@ -8,6 +8,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 BASE_DIR = Path(__file__).parent
@@ -31,6 +32,27 @@ def _load_dotenv(path):
 _load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI(title="TVHelper Web Agent")
+import logging
+import sys
+
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
+logger = logging.getLogger("tvhelper")
+
+# Подробный лог всех HTTP-запросов
+@app.middleware("http")
+async def log_requests(request, call_next):
+    logger.info(f"→ {request.method} {request.url.path}")
+    response = await call_next(request)
+    logger.info(f"← {response.status_code}")
+    return response
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # === Дефолтный макс. вывод по модели (можно переопределить в .env) ===
 # Формат: MODEL_MAX_OUTPUT = {"gpt-4o": 16384, "deepseek-chat": 8192, ...}
