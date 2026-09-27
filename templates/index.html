@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TVHelper Web Agent</title>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="marked.min.js"></script>
     <style>
         :root {
             --bg: #0d1117;
@@ -301,6 +301,7 @@
             </div>
             <button id="export-btn" class="btn btn-sm" title="Экспорт диалога">📥</button>
             <button id="help-btn" class="btn btn-sm" title="Справка по настройкам">❓</button>
+            <button id="clear-btn" class="btn btn-sm btn-danger" title="Очистить чат">🗑️</button>
         </div>
     </div>
 
@@ -413,6 +414,8 @@
         let currentModel = '';
         let modelsList = [];
         let history = []; // {role, content, sources?, metrics?}
+        let sending = false;
+        const HISTORY_MAX = 50;
 
         // === Sliders ===
         tempSlider.addEventListener('input', () => {
@@ -433,8 +436,19 @@
 
         function saveHistory() {
             try {
+                // Keep only last HISTORY_MAX messages
+                if (history.length > HISTORY_MAX) {
+                    history = history.slice(-HISTORY_MAX);
+                }
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-            } catch(e) { /* quota exceeded — ignore */ }
+            } catch(e) { /* quota exceeded — trim more aggressively */
+                try {
+                    if (history.length > 20) {
+                        history = history.slice(-20);
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+                    }
+                } catch(e2) { /* give up */ }
+            }
         }
 
         function loadHistory() {
@@ -669,14 +683,7 @@
             copyBtn.className = 'copy-btn';
             copyBtn.textContent = '📋 Копировать';
             copyBtn.addEventListener('click', () => {
-                navigator.clipboard.writeText(content).then(() => {
-                    copyBtn.textContent = '✅ Скопировано';
-                    copyBtn.classList.add('copied');
-                    setTimeout(() => {
-                        copyBtn.textContent = '📋 Копировать';
-                        copyBtn.classList.remove('copied');
-                    }, 2000);
-                });
+                copyToClipboard(content, copyBtn);
             });
             footer.appendChild(copyBtn);
             wrapper.appendChild(footer);
@@ -737,10 +744,39 @@
             return d.innerHTML;
         }
 
+        async function copyToClipboard(text, btn) {
+            try {
+                await navigator.clipboard.writeText(text);
+                btn.textContent = '✅ Скопировано';
+                btn.classList.add('copied');
+            } catch {
+                // Fallback for non-HTTPS/localhost
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try {
+                    document.execCommand('copy');
+                    btn.textContent = '✅ Скопировано';
+                    btn.classList.add('copied');
+                } catch {
+                    btn.textContent = '❌ Не удалось';
+                }
+                document.body.removeChild(ta);
+            }
+            setTimeout(() => {
+                btn.textContent = '📋 Копировать';
+                btn.classList.remove('copied');
+            }, 2000);
+        }
+
         // === Send question ===
         async function sendQuestion() {
             const question = input.value.trim();
-            if (!question) return;
+            if (!question || sending) return;
+            sending = true;
 
             sendBtn.disabled = true;
             sendBtn.style.display = 'none';
@@ -847,14 +883,7 @@
                                     : '?';
                                 meta.textContent = `⚡ ${metrics.eval_count} токенов • ${tps} т/с`;
                                 copyBtn.addEventListener('click', () => {
-                                    navigator.clipboard.writeText(responseText).then(() => {
-                                        copyBtn.textContent = '✅ Скопировано';
-                                        copyBtn.classList.add('copied');
-                                        setTimeout(() => {
-                                            copyBtn.textContent = '📋 Копировать';
-                                            copyBtn.classList.remove('copied');
-                                        }, 2000);
-                                    });
+                                    copyToClipboard(responseText, copyBtn);
                                 });
                                 msgDiv.appendChild(footer);
                             } else if (event.type === 'error') {
@@ -872,16 +901,21 @@
 
             } catch (e) {
                 if (e.name === 'AbortError') {
+                    // Remove thinking msg if still there
+                    const thinking = document.getElementById('thinking-msg');
+                    if (thinking) thinking.remove();
                     addMessage('system', '⏹ Ответ прерван');
                     history.push({role: 'system', content: '⏹ Ответ прерван'});
                 } else {
                     console.error(e);
-                    thinkingEl.remove();
+                    const thinking = document.getElementById('thinking-msg');
+                    if (thinking) thinking.remove();
                     addMessage('system', '❌ Ошибка: ' + e.message);
                     history.push({role: 'system', content: '❌ Ошибка: ' + e.message});
                 }
                 saveHistory();
             } finally {
+                sending = false;
                 sendBtn.disabled = false;
                 sendBtn.style.display = 'inline-block';
                 cancelBtn.style.display = 'none';
@@ -940,6 +974,15 @@
 
         // === Clear chat (double-click header) ===
         document.querySelector('.header h1').addEventListener('dblclick', () => {
+            if (confirm('Очистить историю чата?')) {
+                history = [];
+                saveHistory();
+                chat.innerHTML = '<div class="empty-state"><h2>Задайте вопрос по документации</h2><p>Я ищу ответы в базе знаний SDE Search...</p></div>';
+            }
+        });
+
+        // === Clear chat button ===
+        document.getElementById('clear-btn').addEventListener('click', () => {
             if (confirm('Очистить историю чата?')) {
                 history = [];
                 saveHistory();

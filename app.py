@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -14,22 +15,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 
-
-def _load_dotenv(path):
-    if not path.exists():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key, val = key.strip(), val.strip()
-        if len(val) > 1 and val[0] in '"\'' and val[-1] == val[0]:
-            val = val[1:-1]
-        os.environ.setdefault(key, val)
-
-
-_load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI(title="TVHelper Web Agent")
 import logging
@@ -64,6 +50,11 @@ if _MODEL_MAX_OUTPUT_STR:
             k, v = part.split("=", 1)
             MODEL_MAX_OUTPUT_OVERRIDES[k.strip()] = int(v.strip())
 DEFAULT_MAX_OUTPUT = int(os.getenv("DEFAULT_MAX_OUTPUT", "16384"))
+MAX_QUESTION_LEN = int(os.getenv("MAX_QUESTION_LEN", "8192"))
+MIN_K = 1
+MAX_K = int(os.getenv("MAX_K", "20"))
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 2.0
 SEARCH_URL = os.getenv("SEARCH_URL", "http://localhost:11436/search")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.3"))
 DEFAULT_NUM_PREDICT = int(os.getenv("DEFAULT_NUM_PREDICT", "2048"))
@@ -210,22 +201,28 @@ async def system_status():
 async def activate_model(body: dict):
     """Принудительно загрузить модель в VRAM (вытесняет предыдущую)."""
     model = body.get("model", "")
-    if not model:
-        return {"error": "Model required"}
+    if not model or not isinstance(model, str):
+        return {"error": "Model name is required"}
+    if len(model) > 256:
+        return {"error": "Model name too long"}
     try:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post("http://localhost:11434/api/generate", json={
                 "model": model,
-                "prompt": "",  # пустой промпт — только load/unload
+                "prompt": "",
                 "stream": False,
                 "keep_alive": "10m",
                 "options": {"num_ctx": 16384}
             })
         if r.status_code == 200:
             return {"ok": True, "model": model}
-        return {"error": f"ollama returned {r.status_code}"}
-    except Exception as e:
-        return {"error": str(e)}
+        if r.status_code == 404:
+            return {"error": f"Model '{model}' not found in Ollama"}
+        return {"error": f"Ollama returned {r.status_code}: {r.text[:200]}"}
+    except httpx.TimeoutException:
+        return {"error": "Ollama did not respond within 30s"}
+    except httpx.ConnectError:
+        return {"error": "Cannot connect to Ollama (is it running?)"}
 
 
 @app.post("/api/search")
@@ -234,6 +231,10 @@ async def search_only(body: dict):
     k = body.get("k", 5)
     if not query:
         return {"error": "Query is required"}
+    if len(query) > MAX_QUESTION_LEN:
+        return {"error": f"Query too long (max {MAX_QUESTION_LEN} chars)"}
+    if not isinstance(k, int) or k < MIN_K or k > MAX_K:
+        return {"error": f"k must be int between {MIN_K} and {MAX_K}"}
     try:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.get(SEARCH_URL, params={"query": query, "k": k})
@@ -256,6 +257,16 @@ async def chat(body: dict):
 
     if not question:
         return {"error": "Question is required"}
+    if len(question) > MAX_QUESTION_LEN:
+        return {"error": f"Question too long (max {MAX_QUESTION_LEN} chars)"}
+    if not isinstance(k, int) or k < MIN_K or k > MAX_K:
+        return {"error": f"k must be int between {MIN_K} and {MAX_K}"}
+    if not isinstance(temperature, (int, float)) or temperature < MIN_TEMPERATURE or temperature > MAX_TEMPERATURE:
+        return {"error": f"temperature must be between {MIN_TEMPERATURE} and {MAX_TEMPERATURE}"}
+    if not isinstance(num_predict, int) or num_predict < 1 or num_predict > 131072:
+        return {"error": "num_predict must be int between 1 and 131072"}
+    if not isinstance(history, list):
+        return {"error": "history must be a list"}
 
     provider = None
     for p in PROVIDERS:
@@ -365,9 +376,18 @@ async def _stream_ollama(provider, model, messages, temperature, num_predict):
                     except json.JSONDecodeError:
                         pass
     except httpx.TimeoutException:
-        yield f"data: {json.dumps({'type': 'error', 'data': 'LLM request timed out.'})}\n\n"
-    except Exception as e:
-        yield f"data: {json.dumps({'type': 'error', 'data': f'LLM error: {e}'})}\n\n"
+        yield f"data: {json.dumps({'type': 'error', 'data': 'LLM request timed out — Ollama took too long.'})}\n\n"
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            err_msg = f"Model '{model}' not found in Ollama."
+            yield f"data: {json.dumps({'type': 'error', 'data': err_msg})}\n\n"
+        else:
+            err_msg = f"Ollama HTTP {e.response.status_code}"
+            yield f"data: {json.dumps({'type': 'error', 'data': err_msg})}\n\n"
+    except httpx.ConnectError:
+        yield f"data: {json.dumps({'type': 'error', 'data': 'Cannot connect to Ollama — is the service running?'})}\n\n"
+    except httpx.ReadError:
+        yield f"data: {json.dumps({'type': 'error', 'data': 'Connection lost while reading Ollama response.'})}\n\n"
 
 
 async def _stream_openai(provider, model, messages, temperature, num_predict):
