@@ -21,7 +21,7 @@ class HybridSearch:
         chroma_path,
         collection_name,
         bm25_pkl_path,
-        embedding_model="nomic-embed-text",
+        embedding_model="bge-m3",
         ollama_base_url="http://localhost:11434",
     ):
         import chromadb
@@ -42,6 +42,7 @@ class HybridSearch:
             base_url=ollama_base_url,
             ollama_additional_kwargs={"mirostat": 0},
         )
+        self.embed_query_prefix = "query: "  # bge-m3: prefix for queries per docs
 
         with open(bm25_pkl_path, "rb") as f:
             self.bm25_data = pickle.load(f)
@@ -51,18 +52,19 @@ class HybridSearch:
         ]
         self.bm25 = BM25Okapi(tokenized_corpus)
 
-        # Reranker (FlashRank ONNX, CPU)
+        # Reranker (CrossEncoder multilingual on GPU)
         self.reranker = None
         try:
-            from flashrank import Ranker
+            from sentence_transformers import CrossEncoder
 
-            flashrank_cache = os.environ.get(
-                "FLASHRANK_CACHE_DIR",
-                str(Path.home() / ".cache" / "flashrank"),
+            reranker_model = os.environ.get(
+                "RAG_RERANKER_MODEL",
+                "BAAI/bge-reranker-v2-m3",
             )
-            self.reranker = Ranker(
-                model_name="ms-marco-MiniLM-L-12-v2",
-                cache_dir=flashrank_cache,
+            self.reranker = CrossEncoder(
+                reranker_model,
+                device="cuda",
+                trust_remote_code=True,
             )
         except Exception as e:
             print(f"  [WARN] Reranker не загружен: {e}")
@@ -76,7 +78,8 @@ class HybridSearch:
             where_filter = {"product": product_filter}
 
         # --- 1. Векторный поиск (ChromaDB) ---
-        q_embed = self.embed_model.get_text_embedding(query)
+        # bge-m3 требует query: prefix для запросов
+        q_embed = self.embed_model.get_text_embedding(self.embed_query_prefix + query)
         vec_results = self.collection.query(
             query_embeddings=[q_embed],
             n_results=TOP_K_VECTOR,
@@ -141,29 +144,13 @@ class HybridSearch:
                     fused.append(d)
                     break
 
-        # --- 4. Реренкинг (FlashRank) ---
+        # --- 4. Реренкинг (CrossEncoder на GPU) ---
         if self.reranker and fused:
-            from flashrank import RerankRequest
-
-            passages = []
-            for i, d in enumerate(fused):
-                passages.append(
-                    {
-                        "id": str(i),
-                        "text": d["text"],
-                        "meta": {
-                            "source": d["source"],
-                            "product": d.get("product", ""),
-                            "chunk_id": d["id"],
-                        },
-                    }
-                )
-            req = RerankRequest(query=query, passages=passages)
-            reranked = self.reranker.rerank(req)
-            for rd in reranked:
-                idx = int(rd["id"])
-                # Convert numpy float32 -> native float so FastAPI can JSON-serialize
-                fused[idx]["rerank_score"] = float(rd["score"])
+            passages = [d["text"] for d in fused]
+            query_passage_pairs = [(query, p) for p in passages]
+            scores = self.reranker.predict(query_passage_pairs, show_progress_bar=False)
+            for i, score in enumerate(scores):
+                fused[i]["rerank_score"] = float(score)
             fused.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
 
         return fused[:k]

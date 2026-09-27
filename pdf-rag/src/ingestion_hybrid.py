@@ -165,12 +165,14 @@ def index_documents(docs_dir: Path, default_product: str = "", default_summary: 
     )
 
     embed_model = OllamaEmbedding(
-        model_name=os.environ.get("RAG_EMBED_MODEL", "nomic-embed-text"),
+        model_name=os.environ.get("RAG_EMBED_MODEL", "bge-m3"),
         base_url=os.environ.get("RAG_OLLAMA_URL", "http://localhost:11434"),
         ollama_additional_kwargs={"mirostat": 0},
     )
 
     embed_prefix = build_embedding_prefix(default_product, default_summary)
+    # bge-m3 requires "doc: " prefix for index-time embeddings
+    doc_prefix = "doc: " if embed_model.model_name == "bge-m3" else ""
 
     files = sorted(docs_dir.glob('*'))
     total = len(files)
@@ -206,7 +208,7 @@ def index_documents(docs_dir: Path, default_product: str = "", default_summary: 
         batch_texts = all_texts[i:i+batch_size]
         batch_metas = all_metadatas[i:i+batch_size]
         batch_ids = all_ids[i:i+batch_size]
-        embed_texts = [embed_prefix + t if embed_prefix else t for t in batch_texts]
+        embed_texts = [doc_prefix + (embed_prefix + t if embed_prefix else t) for t in batch_texts]
         embeds = embed_model.get_text_embedding_batch(embed_texts)
         collection.add(
             embeddings=embeds,
@@ -259,12 +261,14 @@ def index_incremental(product: str = "", summary: str = ""):
         )
 
     embed_model = OllamaEmbedding(
-        model_name=os.environ.get("RAG_EMBED_MODEL", "nomic-embed-text"),
+        model_name=os.environ.get("RAG_EMBED_MODEL", "bge-m3"),
         base_url=os.environ.get("RAG_OLLAMA_URL", "http://localhost:11434"),
         ollama_additional_kwargs={"mirostat": 0},
     )
 
     embed_prefix = build_embedding_prefix(product, summary)
+    # bge-m3 requires "doc: " prefix for index-time embeddings
+    inc_doc_prefix = "doc: " if embed_model.model_name == "bge-m3" else ""
 
     # --- загрузка кэша хешей ---
     hashes = {}
@@ -332,7 +336,7 @@ def index_incremental(product: str = "", summary: str = ""):
             batch_texts = new_texts[i:i+batch_size]
             batch_metas = new_metadatas[i:i+batch_size]
             batch_ids = new_ids[i:i+batch_size]
-            embed_texts = [embed_prefix + t if embed_prefix else t for t in batch_texts]
+            embed_texts = [inc_doc_prefix + (embed_prefix + t if embed_prefix else t) for t in batch_texts]
             embeds = embed_model.get_text_embedding_batch(embed_texts)
             collection.add(
                 embeddings=embeds,

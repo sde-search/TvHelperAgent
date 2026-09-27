@@ -104,7 +104,7 @@ def load_searcher():
         chroma_path=chroma_path,
         collection_name="docs",
         bm25_pkl_path=bm25_pkl,
-        embedding_model=os.environ.get("RAG_EMBED_MODEL", "nomic-embed-text"),
+        embedding_model=os.environ.get("RAG_EMBED_MODEL", "bge-m3"),
         ollama_base_url=os.environ.get("RAG_OLLAMA_URL", "http://localhost:11434"),
     )
     return hs
