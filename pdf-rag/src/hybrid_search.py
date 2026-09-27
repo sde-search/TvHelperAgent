@@ -37,10 +37,11 @@ class HybridSearch:
         self.chroma_client = chromadb.PersistentClient(str(chroma_path))
         self.collection = self.chroma_client.get_collection(collection_name)
 
+        # Embedder: bge-m3 через Ollama, НО на CPU (num_gpu=0) — освобождаем GPU для реранкера
         self.embed_model = OllamaEmbedding(
-            model_name=embedding_model,
+            model_name="bge-m3-cpu",
             base_url=ollama_base_url,
-            ollama_additional_kwargs={"mirostat": 0},
+            ollama_additional_kwargs={"mirostat": 0, "num_gpu": 0},
         )
         self.embed_query_prefix = "query: "  # bge-m3: prefix for queries per docs
 
@@ -61,9 +62,10 @@ class HybridSearch:
                 "RAG_RERANKER_MODEL",
                 "BAAI/bge-reranker-v2-m3",
             )
+            rag_device = os.environ.get("RAG_RERANKER_DEVICE", "cuda")
             self.reranker = CrossEncoder(
                 reranker_model,
-                device="cuda",
+                device=rag_device,
                 trust_remote_code=True,
             )
         except Exception as e:

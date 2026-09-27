@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """FastAPI search server for hybrid RAG with product filtering."""
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import pickle
 import re
+import signal
 import subprocess
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,14 +37,14 @@ VENV_PYTHON = sys.executable  # runs from .venv, so this is the venv python
 
 # — Helper: get images for a source file
 def get_images_for_source(source_name: str, page_number: int | None = None) -> list[str]:
-    """Возвращает список URL картинок для указанного source и опционально — страницы."""
+    """Возвращает список URL скриншотов страниц для указанного source и опционально — страницы."""
     source_stem = Path(source_name).stem
     img_dir = EXTRACTED_DIR / source_stem
     if not img_dir.exists():
         return []
-    pattern = f"page*_img*.png"
+    pattern = "*.png"
     if page_number is not None:
-        pattern = f"page{page_number}_img*.png"
+        pattern = f"page{page_number}.png"
     return [f"/extracted/{source_stem}/{f.name}" for f in sorted(img_dir.glob(pattern))]
 
 # — Логирование поисковых запросов
@@ -175,7 +178,9 @@ async def search(
         raise HTTPException(503, "Search engine not loaded")
 
     t0 = time.time()
-    docs = hs.search(query, k=k, product_filter=product)
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor() as pool:
+        docs = await loop.run_in_executor(pool, hs.search, query, k, product)
     elapsed = int((time.time() - t0) * 1000)
     log_search(query, product, len(docs), elapsed)
 
@@ -565,4 +570,35 @@ async def validate(body: ValidateRequest):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 11436
+
+    # GPU guard: kill other python3 processes hogging VRAM
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line or "python" not in line.lower():
+                continue
+            parts = line.split(", ")
+            if len(parts) < 3:
+                continue
+            pid_str = parts[0].strip()
+            used_mb = int(parts[2].strip())
+            if pid_str.isdigit() and used_mb > 500:
+                pid = int(pid_str)
+                if pid != os.getpid():
+                    print(f"[GPU GUARD] Killing python3 PID {pid} ({used_mb} MB VRAM)")
+                    os.kill(pid, signal.SIGTERM)
+                    time.sleep(1)
+                    try:
+                        os.kill(pid, 0)
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+    except Exception as e:
+        print(f"[GPU GUARD] Check failed: {e}")
+
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

@@ -79,9 +79,10 @@ def deduplicate_to_flat(target: Path = DATA_PDFS):
     return copied
 
 
-def extract_images_from_pdf(path: Path, source_stem: str) -> int:
-    """Извлекает изображения из PDF, сохраняет в EXTRACTED_DIR/source_stem/page{N}_img{M}.png.
-    Возвращает количество извлечённых картинок."""
+def render_pdf_pages(path: Path, source_stem: str) -> int:
+    """Рендерит каждую страницу PDF как PNG (скриншот страницы).
+    Сохраняет в EXTRACTED_DIR/source_stem/page{N}.png.
+    Возвращает количество страниц."""
     import fitz
 
     img_dir = EXTRACTED_DIR / source_stem
@@ -94,19 +95,14 @@ def extract_images_from_pdf(path: Path, source_stem: str) -> int:
     doc = fitz.open(str(path))
     count = 0
     for page_num, page in enumerate(doc, 1):
-        image_list = page.get_images(full=True)
-        for img_idx, img_info in enumerate(image_list):
-            xref = img_info[0]
-            base_image = doc.extract_image(xref)
-            if base_image is None:
-                continue
-            img_bytes = base_image["image"]
-            ext = base_image.get("ext", "png")
-            out_path = img_dir / f"page{page_num}_img{img_idx}.{ext}"
-            out_path.write_bytes(img_bytes)
-            count += 1
+        # Рендер страницы в PNG с разрешением 150 DPI
+        pix = page.get_pixmap(dpi=150)
+        out_path = img_dir / f"page{page_num}.png"
+        pix.save(str(out_path))
+        count += 1
+        print(f"    Страница {page_num} рендерена -> {out_path.name}")
     doc.close()
-    print(f"    Извлечено {count} картинок -> {img_dir}")
+    print(f"    Рендерено {count} страниц -> {img_dir}")
     return count
 
 
@@ -115,8 +111,8 @@ def extract_text_pagewise(path: Path, source_stem: str) -> list[dict]:
     Возвращает список: [{text, page_number}, ...] для каждой страницы с текстом."""
     import fitz
 
-    # Сначала картинки
-    extract_images_from_pdf(path, source_stem)
+    # Сначала рендер страниц
+    render_pdf_pages(path, source_stem)
 
     doc = fitz.open(str(path))
     pages = []

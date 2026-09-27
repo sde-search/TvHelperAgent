@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TVHelper Web Agent</title>
+    <script src="/static/marked.min.js"></script>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --surface: #161b22;
+            --surface2: #21262d;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-dim: #8b949e;
+            --accent: #58a6ff;
+            --accent-hover: #79b8ff;
+            --green: #3fb950;
+            --orange: #d29922;
+            --red: #f85149;
+            --radius: 8px;
+            --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font);
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .header h1 { font-size: 17px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+        .header-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .header-controls label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+        .model-select {
+            background: var(--surface2); color: var(--text);
+            border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 5px 8px; font-size: 12px; cursor: pointer; min-width: 120px;
+        }
+        .model-select:focus { outline: none; border-color: var(--accent); }
+        .apply-btn {
+            background: var(--accent); color: #fff;
+            border: 1px solid var(--accent); border-radius: var(--radius);
+            padding: 5px 10px; font-size: 13px; cursor: pointer; font-weight: 600; transition: all 0.15s;
+        }
+        .apply-btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+        /* Status bar */
+        .status-bar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            font-size: 11px;
+        }
+        .ctx-badge {
+            font-size: 11px;
+            color: var(--text-dim);
+            background: rgba(255,255,255,.05);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 2px 6px;
+            white-space: nowrap;
+            line-height: 24px;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+        }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; }
+        .status-dot.ok { background: var(--green); }
+        .status-dot.err { background: var(--red); }
+
+        /* Sliders */
+        .slider-group { display: flex; align-items: center; gap: 6px; }
+        .slider-group label { font-size: 11px; }
+        .slider-group input[type="range"] {
+            width: 60px; height: 4px;
+            -webkit-appearance: none; appearance: none;
+            background: var(--border); border-radius: 2px; outline: none;
+        }
+        .slider-group input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 12px; height: 12px; border-radius: 50%;
+            background: var(--accent); cursor: pointer;
+        }
+        .slider-value { font-size: 11px; color: var(--text-dim); min-width: 24px; text-align: center; }
+
+        /* K control */
+        .k-control { display: flex; align-items: center; gap: 4px; }
+        .k-control label { font-size: 11px; }
+        .k-control input {
+            width: 40px; background: var(--surface2); color: var(--text);
+            border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 3px 6px; font-size: 12px; text-align: center;
+        }
+
+        /* Chat */
+        .chat-container {
+            flex: 1; overflow-y: auto; padding: 16px 20px;
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .chat-container::-webkit-scrollbar { width: 8px; }
+        .chat-container::-webkit-scrollbar-track { background: var(--bg); }
+        .chat-container::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+        .message { max-width: 82%; padding: 10px 14px; border-radius: var(--radius); line-height: 1.5; font-size: 14px; word-wrap: break-word; }
+        .message.user {
+            background: var(--accent); color: #fff; align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+        .message.assistant {
+            background: var(--surface); border: 1px solid var(--border);
+            align-self: flex-start; border-bottom-left-radius: 4px;
+        }
+        .message.assistant p { margin-bottom: 6px; }
+        .message.assistant p:last-child { margin-bottom: 0; }
+        .message.assistant pre {
+            background: var(--bg); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 10px; overflow-x: auto;
+            font-size: 13px; margin: 6px 0;
+        }
+        .message.assistant code { background: var(--surface2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+        .message.assistant pre code { background: none; padding: 0; }
+        .message.assistant ul, .message.assistant ol { padding-left: 20px; margin: 6px 0; }
+        .message.assistant blockquote { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--text-dim); margin: 6px 0; }
+        .message.assistant table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+        .message.assistant th, .message.assistant td { border: 1px solid var(--border); padding: 4px 8px; }
+        .message.assistant th { background: var(--surface2); }
+
+        .msg-footer {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border);
+        }
+        .msg-meta { font-size: 11px; color: var(--text-dim); }
+        .copy-btn {
+            background: none; border: 1px solid var(--border); border-radius: 4px;
+            color: var(--text-dim); font-size: 12px; padding: 2px 8px; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .copy-btn:hover { border-color: var(--accent); color: var(--text); }
+        .copy-btn.copied { border-color: var(--green); color: var(--green); }
+
+        /* Sources block */
+        .sources-block {
+            align-self: flex-start; max-width: 100%;
+            background: var(--surface2); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 8px 12px; font-size: 13px;
+        }
+        .sources-header { font-weight: 600; color: var(--orange); margin-bottom: 6px; font-size: 12px; }
+        .source-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 3px 0; cursor: pointer;
+            border-bottom: 1px solid transparent;
+            transition: background 0.1s;
+        }
+        .source-item:hover { background: var(--surface); border-radius: 4px; }
+        .source-score {
+            font-size: 10px; padding: 1px 5px; border-radius: 8px;
+            background: var(--bg); flex-shrink: 0;
+        }
+        .source-name { color: var(--accent); font-weight: 500; }
+        .source-preview {
+            display: none; margin-top: 4px; padding: 6px 8px;
+            background: var(--bg); border-radius: 4px;
+            font-size: 12px; color: var(--text-dim); line-height: 1.4;
+            max-height: 100px; overflow-y: auto; white-space: pre-wrap;
+        }
+        .source-item.open .source-preview { display: block; }
+
+        .source-images img:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+
+        .lightbox {
+            display: none; position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.9); z-index: 10000;
+            justify-content: center; align-items: center;
+            cursor: zoom-out;
+        }
+        .lightbox img {
+            max-width: 90vw; max-height: 90vh;
+            border-radius: 8px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.6);
+        }
+        .lightbox-close {
+            position: fixed; top: 20px; right: 30px;
+            font-size: 36px; color: #fff; cursor: pointer;
+            z-index: 10001; opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .lightbox-close:hover { opacity: 1; }
+
+        .message.system {
+            background: transparent; color: var(--text-dim);
+            align-self: center; font-size: 12px; font-style: italic;
+        }
+
+        .typing-indicator { display: flex; gap: 4px; padding: 4px 0; }
+        .typing-indicator span {
+            width: 7px; height: 7px; background: var(--text-dim);
+            border-radius: 50%; animation: bounce 1.4s ease-in-out infinite;
+        }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes bounce { 0%,80%,100% { transform: translateY(0); } 40% { transform: translateY(-7px); } }
+
+        /* Thinking section */
+        .thinking-section {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px 12px;
+            margin: 8px 0;
+            font-size: 12px;
+        }
+        .thinking-label {
+            color: var(--orange);
+            font-weight: 600;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+        .thinking-text {
+            color: var(--text-dim);
+            font-style: italic;
+            line-height: 1.4;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Input */
+        .input-container {
+            background: var(--surface); border-top: 1px solid var(--border);
+            padding: 10px 20px; display: flex; gap: 8px;
+            align-items: center; flex-shrink: 0;
+        }
+        .input-container textarea {
+            flex: 1; background: var(--surface2); color: var(--text);
+            border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 8px 12px; font-size: 14px; font-family: var(--font);
+            resize: none; min-height: 38px; max-height: 100px; outline: none;
+        }
+        .input-container textarea:focus { border-color: var(--accent); }
+        .input-container textarea::placeholder { color: var(--text-dim); }
+        .btn {
+            background: var(--accent); color: #fff; border: none;
+            border-radius: var(--radius); padding: 8px 16px; font-size: 13px;
+            font-weight: 500; cursor: pointer; transition: background 0.2s; white-space: nowrap;
+        }
+        .btn:hover:not(:disabled) { background: var(--accent-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-danger { background: var(--red); }
+        .btn-danger:hover:not(:disabled) { background: #f55; }
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
+
+        /* Empty state */
+        .empty-state {
+            flex: 1; display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            color: var(--text-dim); text-align: center; gap: 10px;
+        }
+        .empty-state h2 { font-size: 18px; color: var(--text); }
+        .empty-state p { font-size: 13px; max-width: 400px; }
+
+        @media (max-width: 700px) {
+            .message { max-width: 95%; }
+            .header { flex-direction: column; align-items: stretch; }
+            .header-controls { justify-content: center; }
+        }
+
+        /* Help Modal */
+        .help-modal {
+            position: fixed; inset: 0; z-index: 1000;
+            background: rgba(0,0,0,0.6);
+            display: flex; align-items: center; justify-content: center;
+            backdrop-filter: blur(2px);
+        }
+        .help-modal-content {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; max-width: 560px; width: 90%;
+            max-height: 80vh; display: flex; flex-direction: column;
+        }
+        .help-modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px 20px; border-bottom: 1px solid var(--border);
+        }
+        .help-modal-title { font-size: 16px; font-weight: 600; }
+        .help-close {
+            background: none; border: none; color: var(--text-dim);
+            font-size: 24px; cursor: pointer; padding: 0 4px;
+        }
+        .help-close:hover { color: var(--text); }
+        .help-modal-body {
+            padding: 16px 20px 20px; overflow-y: auto;
+            font-size: 13px; line-height: 1.6;
+        }
+        .help-section { margin-bottom: 16px; }
+        .help-section:last-child { margin-bottom: 0; }
+        .help-section h4 { font-size: 14px; color: var(--accent); margin-bottom: 4px; }
+        .help-section p { color: var(--text-dim); margin-bottom: 4px; }
+        .help-section ul { list-style: none; padding: 0; }
+        .help-section ul li { padding: 1px 0 1px 14px; position: relative; color: var(--text-dim); }
+        .help-section ul li::before { content: '·'; position: absolute; left: 2px; color: var(--text-dim); }
+        .help-section code {
+            background: var(--surface2); padding: 1px 5px;
+            border-radius: 3px; font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📄 TVHelper Web Agent</h1>
+        <div class="header-controls">
+            <div class="k-control">
+                <label for="k-input">K:</label>
+                <input type="number" id="k-input" value="5" min="1" max="20">
+            </div>
+            <div class="slider-group">
+                <label for="temp-slider">temp</label>
+                <input type="range" id="temp-slider" min="0" max="10" value="3">
+                <span class="slider-value" id="temp-val">0.3</span>
+            </div>
+            <div class="slider-group">
+                <label for="tokens-slider">токенов</label>
+                <input type="range" id="tokens-slider" min="256" max="4096" step="128" value="2048">
+                <span class="slider-value" id="tokens-val">2048</span>
+            </div>
+            <span class="ctx-badge" id="ctx-badge" title="Контекстное окно модели">ctx: —</span>
+            <label for="provider-select">Провайдер:</label>
+            <select id="provider-select" class="model-select"><option>Загрузка...</option></select>
+            <label for="model-select">Модель:</label>
+            <select id="model-select" class="model-select"><option>—</option></select>
+            <button id="apply-btn" class="btn btn-sm apply-btn" title="Применить выбранную модель">OK</button>
+            <span id="current-model-label" class="model-label" style="font-size:11px;color:var(--text-dim);margin-left:4px;"></span>
+            <div class="status-bar" id="status-bar">
+                <span class="status-item" id="gpu-status"><span class="status-dot err"></span>GPU</span>
+                <span class="status-item" id="ollama-status"><span class="status-dot err"></span>Ollama</span>
+                <span class="status-item" id="search-status"><span class="status-dot err"></span>Search</span>
+                <span class="status-item" id="vram-warning" style="display:none; background: rgba(255,100,50,.15); border-color: #f64;"><span class="status-dot err"></span>⚠️ VRAM</span>
+            </div>
+            <button id="export-btn" class="btn btn-sm" title="Экспорт диалога">📥</button>
+            <button id="files-btn" class="btn btn-sm" title="Список проиндексированных файлов">📁 Файлы</button>
+            <button id="upload-btn" class="btn btn-sm" title="Загрузить документ в базу знаний">📤 Загрузить</button>
+            <button id="help-btn" class="btn btn-sm" title="Справка по настройкам">❓</button>
+            <button id="clear-btn" class="btn btn-sm btn-danger" title="Очистить чат">🗑️</button>
+        </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="help-modal" style="display:none;">
+        <div class="help-modal-content">
+            <div class="help-modal-header">
+                <span class="help-modal-title">❓ О настройках</span>
+                <button id="help-close" class="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div class="help-section">
+                    <h4>🔢 K — количество чанков</h4>
+                    <p>Сколько фрагментов документации будет найдено поиском и передано модели как контекст.</p>
+                    <ul>
+                        <li><strong>1–3</strong> — быстрый ответ, мало контекста</li>
+                        <li><strong>5–7</strong> — оптимально (по умолчанию 5)</li>
+                        <li><strong>10–20</strong> — больше контекста, но модель может «размазать» внимание</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>🌡️ temp — температура</h4>
+                    <p>Насколько «креативной» будет модель. Выше — больше вариативности, ниже — строже и фактологичнее.</p>
+                    <ul>
+                        <li><strong>0.0–0.2</strong> — строго по фактам, почти без вариаций (для точных ответов)</li>
+                        <li><strong>0.3–0.5</strong> — сбалансировано (по умолчанию 0.3)</li>
+                        <li><strong>0.7–1.0</strong> — творческий режим, может придумывать</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>📝 токенов — макс. длина ответа</h4>
+                    <p>Максимум токенов, которые модель может выдать за один ответ. 1 токен ≈ 1 слово или часть слова.</p>
+                    <ul>
+                        <li><strong>512–1024</strong> — краткие ответы</li>
+                        <li><strong>2048</strong> — оптимально (по умолчанию)</li>
+                        <li><strong>4096+</strong> — для развёрнутых ответов</li>
+                    </ul>
+                    <p>⚡ Максимум слайдера <strong>автоматически подстраивается</strong> под выбранную модель: локальные Ollama-модели до 16384, облачные API — до указанных провайдером лимитов.</p>
+                </div>
+                <div class="help-section">
+                    <h4>🏷️ Провайдер</h4>
+                    <p>Откуда брать модель для ответа. Настраивается на сервере в файле <code>.env</code>.</p>
+                    <ul>
+                        <li><strong>Локальная (Ollama)</strong> — ваша видеокарта, свои модели, бесплатно</li>
+                        <li><strong>OpenAI / Polza / DeepSeek / OpenRouter</strong> — внешние API, нужен ключ в .env</li>
+                        <li><strong>Anthropic (Claude)</strong> — Claude через API, нужен ключ в .env</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>🤖 Модель</h4>
+                    <p>Конкретная модель выбранного провайдера. Для локального Ollama показываются все установленные модели (кроме <code>nomic-embed-text</code>).</p>
+                    <p><strong>OK</strong> — применить выбранную модель к чату.</p>
+                </div>
+                <div class="help-section">
+                    <h4>📊 Статус-бар</h4>
+                    <p>🟢 = сервис работает, 🔴 = недоступен.</p>
+                    <ul>
+                        <li><strong>GPU</strong> — занято/всего памяти на видеокарте</li>
+                        <li><strong>Ollama</strong> — запущен ли локальный Ollama</li>
+                        <li><strong>Search</strong> — работает ли поисковый сервер RAG (pdf-rag)</li>
+                    </ul>
+                </div>
+                <div class="help-section">
+                    <h4>📥 Экспорт диалога</h4>
+                    <p>Скачать всю историю чата в Markdown-файл.</p>
+                </div>
+                <div class="help-section">
+                    <h4>📁 Проиндексированные файлы</h4>
+                    <p>Кнопка <strong>📁 Файлы</strong> в панели инструментов открывает таблицу всех документов в базе знаний RAG.</p>
+                    <p>Поиск — фильтрует таблицу по имени файла в реальном времени. Удобно проверить, проиндексирован ли документ, или найти файл по фрагменту названия.</p>
+                </div>
+                <div class="help-section">
+                    <h4>📤 Загрузка документов</h4>
+                    <p>Кнопка <strong>📤 Загрузить</strong> открывает диалог загрузки нового документа в базу знаний RAG.</p>
+                    <p><strong>Форматы:</strong> PDF, DOCX, DOC, TXT, MD, RTF (до 50 MB).</p>
+                    <p>При загрузке файл проверяется по SHA-256 хешу — если такой документ уже есть в базе, дубликат не создаётся.</p>
+                    <p>После успешной загрузки нажмите <strong>🔄 Переиндексировать</strong>, чтобы добавить содержимое нового файла в поисковый индекс (создаются векторные чанки и BM25-индекс).</p>
+                </div>
+                <div class="help-section">
+                    <h4>⚠️ VRAM — предупреждение в статус-баре</h4>
+                    <p>Если выбранная модель с текущим контекстом не влезает в видеопамять — в статус-баре появляется <strong>⚠️ VRAM</strong>.</p>
+                    <p>При наведении — подсказка: сколько VRAM нужно модели и сколько свободно. Если предупреждение активно — возможны тормоза из-за выгрузки слоёв на CPU.</p>
+                    <p>Расчёт приблизительный для Q4-моделей. Облачные провайдеры не проверяются.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Files Modal -->
+    <div id="files-modal" class="help-modal" style="display:none;">
+        <div class="help-modal-content" style="max-width: 720px;">
+            <div class="help-modal-header">
+                <span class="help-modal-title">📁 Проиндексированные файлы</span>
+                <button id="files-close" class="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div style="display:flex; gap:8px; margin-bottom:12px;">
+                    <input type="text" id="files-search" placeholder="Поиск по имени файла..." style="flex:1; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:var(--radius); padding:6px 10px; font-size:13px; outline:none;">
+                    <span id="files-count" style="font-size:12px; color:var(--text-dim); align-self:center; white-space:nowrap;"></span>
+                </div>
+                <div id="files-table-wrapper" style="max-height:50vh; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius);">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead style="position:sticky; top:0; background:var(--surface);">
+                            <tr>
+                                <th style="padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); color:var(--text-dim); font-weight:500;">Имя файла</th>
+                                <th style="padding:8px 10px; text-align:right; border-bottom:1px solid var(--border); color:var(--text-dim); font-weight:500; width:80px;">Размер</th>
+                            </tr>
+                        </thead>
+                        <tbody id="files-tbody">
+                            <tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">Загрузка...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="help-modal" style="display:none;">
+        <div class="help-modal-content" style="max-width: 500px;">
+            <div class="help-modal-header">
+                <span class="help-modal-title">📤 Загрузить документ</span>
+                <button id="upload-close" class="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div class="help-section">
+                    <h4>Выберите файл</h4>
+                    <p>Поддерживаются: PDF, DOCX, DOC, TXT, MD, RTF (макс. 50 MB)</p>
+                    <input type="file" id="file-input" accept=".pdf,.docx,.doc,.txt,.md,.rtf" style="display:none;">
+                    <button id="file-select-btn" class="btn btn-sm" style="margin-top:8px;">📂 Выбрать файл</button>
+                    <span id="file-name" style="margin-left:8px; font-size:12px; color:var(--text-dim);"></span>
+                </div>
+                <div class="help-section" id="upload-status" style="display:none;">
+                    <h4>📋 Результат</h4>
+                    <p id="upload-result-text" style="font-size:13px;"></p>
+                </div>
+                <div style="display:flex; gap:8px; justify-content:flex-end;">
+                    <button id="upload-cancel-btn" class="btn btn-sm btn-danger" style="display:none;">✕ Закрыть</button>
+                    <button id="upload-submit-btn" class="btn btn-sm" disabled>⬆ Загрузить</button>
+                    <button id="upload-reindex-btn" class="btn btn-sm" style="display:none; background:var(--green);" title="После загрузки нужно переиндексировать">🔄 Переиндексировать</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="chat-container" id="chat">
+        <div class="empty-state">
+            <h2>Задайте вопрос по документации</h2>
+            <p>Я ищу ответы в базе знаний SDE Search и использую локальную LLM для формирования ответа с указанием источников.</p>
+        </div>
+    </div>
+
+    <div class="input-container">
+        <textarea id="question-input" rows="1" placeholder="Введите ваш вопрос..." autofocus></textarea>
+        <button id="send-btn" class="btn">➤ Отправить</button>
+        <button id="cancel-btn" class="btn btn-danger" style="display:none;">✕</button>
+    </div>
+
+    <!-- Lightbox -->
+    <div class="lightbox" id="lightbox" onclick="this.style.display='none'">
+        <span class="lightbox-close" onclick="document.getElementById('lightbox').style.display='none'">&times;</span>
+        <img id="lightbox-img" src="" alt="">
+    </div>
+
+    <script>
+        // === DOM refs ===
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('question-input');
+        const kInput = document.getElementById('k-input');
+        const sendBtn = document.getElementById('send-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
+        const providerSelect = document.getElementById('provider-select');
+        const modelSelect = document.getElementById('model-select');
+        const applyBtn = document.getElementById('apply-btn');
+        const exportBtn = document.getElementById('export-btn');
+        const helpBtn = document.getElementById('help-btn');
+        const helpModal = document.getElementById('help-modal');
+        const helpClose = document.getElementById('help-close');
+        const tempSlider = document.getElementById('temp-slider');
+        const tempVal = document.getElementById('temp-val');
+        const tokensSlider = document.getElementById('tokens-slider');
+        const tokensVal = document.getElementById('tokens-val');
+
+        let abortController = null;
+        let currentModel = '';
+        let modelsList = [];
+        let history = []; // {role, content, sources?, metrics?}
+        let sending = false;
+        const HISTORY_MAX = 50;
+
+        // === Sliders ===
+        tempSlider.addEventListener('input', () => {
+            tempVal.textContent = (parseInt(tempSlider.value) / 10).toFixed(1);
+        });
+        tokensSlider.addEventListener('input', () => {
+            tokensVal.textContent = tokensSlider.value;
+        });
+
+        // === Auto-resize textarea ===
+        input.addEventListener('input', () => {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+        });
+
+        // === Chat history (localStorage) ===
+        const STORAGE_KEY = 'tvhelper_chat_history';
+
+        function saveHistory() {
+            try {
+                // Keep only last HISTORY_MAX messages
+                if (history.length > HISTORY_MAX) {
+                    history = history.slice(-HISTORY_MAX);
+                }
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+            } catch(e) { /* quota exceeded — trim more aggressively */
+                try {
+                    if (history.length > 20) {
+                        history = history.slice(-20);
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+                    }
+                } catch(e2) { /* give up */ }
+            }
+        }
+
+        function loadHistory() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (raw) {
+                    history = JSON.parse(raw);
+                    if (!Array.isArray(history)) history = [];
+                }
+            } catch(e) { history = []; }
+        }
+
+        function renderHistory() {
+            const empty = chat.querySelector('.empty-state');
+            if (empty) empty.remove();
+            chat.innerHTML = '';
+            history.forEach(msg => {
+                if (msg.role === 'user') {
+                    addMessage('user', msg.content);
+                } else if (msg.role === 'assistant') {
+                    addAssistantMessage(msg.content, msg.sources || [], msg.metrics || null);
+                } else if (msg.role === 'system') {
+                    addMessage('system', msg.content);
+                }
+            });
+        }
+
+        // === Load models ===
+        let modelsData = null;
+        async function loadModels() {
+            try {
+                const resp = await fetch('/api/models');
+                const data = await resp.json();
+                modelsData = data;
+
+                // Provider select
+                providerSelect.innerHTML = '';
+                data.providers.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = p.label;
+                    providerSelect.appendChild(opt);
+                });
+
+                // Apply saved provider
+                const savedProvider = localStorage.getItem('tvhelper_provider');
+                const savedModel = localStorage.getItem('tvhelper_model');
+                if (savedProvider && data.providers.find(p => p.id === savedProvider)) {
+                    providerSelect.value = savedProvider;
+                } else if (data.default_provider) {
+                    providerSelect.value = data.default_provider;
+                }
+
+                // Initial model population (apply immediately — use saved or first)
+                popModels(data, savedModel, true);
+            } catch(e) { /* ignore */ }
+        }
+
+        // Provider change handler — only added once
+        providerSelect.addEventListener('change', () => {
+            localStorage.setItem('tvhelper_provider', providerSelect.value);
+            popModels(modelsData, null, false);
+        });
+
+        function popModels(data, savedModel, applyImmediate) {
+            const pid = providerSelect.value;
+            const prov = data.providers.find(p => p.id === pid);
+            if (!prov) return;
+            const prevModel = savedModel || modelSelect.value;
+            modelSelect.innerHTML = '';
+            prov.models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.name;
+                opt.textContent = m.name + (m.size ? ' (' + formatSize(m.size) + ')' : '');
+                if (m.max_output) opt.dataset.maxOutput = m.max_output;
+                if (m.vram_estimate_mb) opt.dataset.vramMb = m.vram_estimate_mb;
+                if (m.presets) {
+                    opt.dataset.presetsTemp = m.presets.temperature;
+                    opt.dataset.presetsNumPredict = m.presets.num_predict;
+                    opt.dataset.presetsK = m.presets.k;
+                    opt.dataset.presetsNumCtx = m.presets.num_ctx;
+                }
+                modelSelect.appendChild(opt);
+            });
+            if (prevModel && prov.models.find(m => m.name === prevModel)) {
+                modelSelect.value = prevModel;
+            } else if (data.default_model && prov.models.find(m => m.name === data.default_model)) {
+                modelSelect.value = data.default_model;
+            } else if (prov.models.length > 0) {
+                modelSelect.value = prov.models[0].name;
+            }
+            if (applyImmediate) currentModel = modelSelect.value;
+            updateTokensSlider();
+            applyPresets();
+        }
+
+        function updateTokensSlider() {
+            const opt = modelSelect.selectedOptions[0];
+            if (!opt || !opt.dataset.maxOutput) return;
+            const maxOut = parseInt(opt.dataset.maxOutput, 10);
+            const slider = document.getElementById('tokens-slider');
+            const curVal = parseInt(slider.value, 10);
+            const newMax = Math.min(maxOut, 65536);
+            slider.max = newMax;
+            // Подгоняем step под разрядность
+            slider.step = newMax <= 2048 ? 128 : 256;
+            if (curVal > newMax) {
+                slider.value = newMax;
+                document.getElementById('tokens-val').textContent = newMax;
+            }
+        }
+
+        function formatSize(bytes) {
+            if (!bytes) return '?';
+            const gb = bytes / (1024**3);
+            return gb >= 1 ? gb.toFixed(1) + 'GB' : (bytes / (1024**2)).toFixed(0) + 'MB';
+        }
+
+        function applyPresets() {
+            const opt = modelSelect.selectedOptions[0];
+            if (!opt || !opt.dataset.presetsTemp) return;
+
+            // Температура
+            const presetsTemp = parseFloat(opt.dataset.presetsTemp);
+            const sliderVal = Math.round(presetsTemp * 10);
+            tempSlider.value = Math.min(Math.max(sliderVal, parseInt(tempSlider.min)), parseInt(tempSlider.max));
+            tempVal.textContent = presetsTemp.toFixed(1);
+
+            // K
+            const presetsK = parseInt(opt.dataset.presetsK, 10);
+            if (!isNaN(presetsK)) {
+                kInput.value = presetsK;
+            }
+
+            // Token slider: ставим на рекомендованные, но в рамках max контекста
+            const presetsNumPredict = parseInt(opt.dataset.presetsNumPredict, 10);
+            if (!isNaN(presetsNumPredict)) {
+                const maxOut = parseInt(opt.dataset.maxOutput, 10) || 16384;
+                const newMax = Math.min(maxOut, 65536);
+                tokensSlider.max = newMax;
+                tokensSlider.step = newMax <= 2048 ? 128 : 256;
+                const clamped = Math.min(Math.max(presetsNumPredict, parseInt(tokensSlider.min)), newMax);
+                tokensSlider.value = clamped;
+                tokensVal.textContent = clamped;
+            }
+
+            // Сохраняем num_ctx для отправки
+            const numCtx = parseInt(opt.dataset.presetsNumCtx, 10);
+            localStorage.setItem('tvhelper_num_ctx', numCtx || '8192');
+            // Показываем num_ctx в UI
+            document.getElementById('ctx-badge').textContent = 'ctx: ' + (numCtx || 8192);
+        }
+
+        modelSelect.addEventListener('change', () => {
+            updateTokensSlider();
+            checkVRAM();
+            applyPresets();
+        });
+
+        applyBtn.addEventListener('click', async () => {  // async added
+            currentModel = modelSelect.value;
+            localStorage.setItem('tvhelper_model', currentModel);
+            document.getElementById('current-model-label').textContent = '→ ' + currentModel;
+            applyPresets();
+            checkVRAM();
+            // Принудительно загружаем модель в VRAM (выгрузит старую)
+            try {
+                await fetch('/api/activate-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: currentModel })
+                });
+                // Обновим статус через 2с, чтобы nvidia-smi успел переключиться
+                setTimeout(refreshStatus, 2000);
+            } catch(e) { /* ignore */ }
+            // Визуальный фидбек
+            applyBtn.style.background = 'var(--accent)';
+            applyBtn.textContent = '✅';
+            setTimeout(() => {
+                applyBtn.textContent = 'OK';
+                applyBtn.style.background = '';
+            }, 1200);
+        });
+
+        // === VRAM check ===
+        function checkVRAM() {
+            const opt = modelSelect.selectedOptions[0];
+            const warnEl = document.getElementById('vram-warning');
+            if (!opt || !opt.dataset.vramMb || !warnEl) {
+                if (warnEl) warnEl.style.display = 'none';
+                return;
+            }
+            const needed = parseInt(opt.dataset.vramMb, 10);
+            // Берём свежую инфу из GPU-статуса (обновляется каждые 5с)
+            const gpuEl = document.getElementById('gpu-status');
+            const match = gpuEl?.title?.match(/^(\d+\.?\d*)\/(\d+\.?\d*)GB/);
+            if (!match) { warnEl.style.display = 'none'; return; }
+            const totalGb = parseFloat(match[2]);
+            const totalMb = totalGb * 1024;
+            // Предупреждение если модели нужно больше 90% от общего объёма VRAM
+            // (модель может быть уже загружена, поэтому сравниваем с total, а не free)
+            if (needed > totalMb * 0.90) {
+                warnEl.style.display = 'flex';
+                warnEl.title = `⚠️ Модели нужно ~${(needed/1024).toFixed(1)}GB из ${totalGb.toFixed(1)}GB VRAM — может не поместиться.`;
+            } else {
+                warnEl.style.display = 'none';
+            }
+        }
+
+        // === System status ===
+        async function refreshStatus() {
+            try {
+                const resp = await fetch('/api/status');
+                const s = await resp.json();
+                updateStatusItem('gpu-status', s.gpu && s.gpu.used_mb != null,
+                    s.gpu ? `${(s.gpu.used_mb/1024).toFixed(1)}/${(s.gpu.total_mb/1024).toFixed(1)}GB ${s.gpu.util_pct}%` : '—');
+                updateStatusItem('ollama-status', s.ollama, 'Ollama');
+                updateStatusItem('search-status', s.search, 'Search');
+                checkVRAM(); // перепроверить с актуальными цифрами GPU
+            } catch(e) { /* ignore */ }
+        }
+
+        function updateStatusItem(id, ok, label) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const dot = el.querySelector('.status-dot');
+            dot.className = 'status-dot ' + (ok ? 'ok' : 'err');
+            el.title = label;
+            // Показываем значение в тексте (GPU: память/использование)
+            const textNode = el.childNodes[el.childNodes.length - 1];
+            if (textNode) textNode.textContent = ' ' + label;
+        }
+
+        // === Chat functions ===
+        function addMessage(role, content) {
+            const empty = chat.querySelector('.empty-state');
+            if (empty) empty.remove();
+            const div = document.createElement('div');
+            div.className = 'message ' + role;
+            div.textContent = content;
+            chat.appendChild(div);
+            scrollToBottom();
+            return div;
+        }
+
+        function addAssistantMessage(content, sources, metrics) {
+            const empty = chat.querySelector('.empty-state');
+            if (empty) empty.remove();
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message assistant';
+
+            // Rendered markdown
+            const body = document.createElement('div');
+            try {
+                body.innerHTML = marked.parse(content);
+            } catch(e) {
+                body.textContent = content;
+            }
+            wrapper.appendChild(body);
+
+            // Footer: metrics + copy
+            const footer = document.createElement('div');
+            footer.className = 'msg-footer';
+            const meta = document.createElement('span');
+            meta.className = 'msg-meta';
+            if (metrics) {
+                const tps = metrics.eval_duration > 0
+                    ? (metrics.eval_count / (metrics.eval_duration / 1e9)).toFixed(1)
+                    : '?';
+                meta.textContent = `⚡ ${metrics.eval_count} токенов • ${tps} т/с`;
+            }
+            footer.appendChild(meta);
+
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'copy-btn';
+            copyBtn.textContent = '📋 Копировать';
+            copyBtn.addEventListener('click', () => {
+                copyToClipboard(content, copyBtn);
+            });
+            footer.appendChild(copyBtn);
+            wrapper.appendChild(footer);
+
+            chat.appendChild(wrapper);
+
+            // Sources block
+            if (sources && sources.length > 0) {
+                addSourcesBlock(sources);
+            }
+
+            scrollToBottom();
+            return wrapper;
+        }
+
+        function addSourcesBlock(sources) {
+            const div = document.createElement('div');
+            div.className = 'sources-block';
+            div.innerHTML = '<div class="sources-header">📚 Источники (нажмите для просмотра)</div>';
+            sources.forEach(s => {
+                const item = document.createElement('div');
+                item.className = 'source-item';
+                const snippet = s.snippet ? escHtml(s.snippet.slice(0, 300)) : '';
+                const pageStr = s.page ? ` стр.${s.page}` : '';
+                item.innerHTML = `
+                    <span class="source-score">${s.score.toFixed(3)}</span>
+                    <span class="source-name">${escHtml(s.source)}${pageStr}</span>
+                    <span style="color:var(--text-dim);font-size:11px;">${escHtml(s.product)}</span>
+                    <div class="source-preview">${snippet}</div>
+                    <div class="source-images" style="display:none;margin-top:8px;"></div>
+                `;
+                item.addEventListener('click', () => {
+                    item.classList.toggle('open');
+                    const imgContainer = item.querySelector('.source-images');
+                    if (item.classList.contains('open') && s.images && s.images.length > 0) {
+                        imgContainer.style.display = 'flex';
+                        imgContainer.style.flexWrap = 'wrap';
+                        imgContainer.style.gap = '6px';
+                        if (!imgContainer.querySelector('img')) {
+                            s.images.forEach(url => {
+                                const img = document.createElement('img');
+                                img.src = url;
+                                img.style.cssText = 'max-width:180px;max-height:140px;border-radius:6px;cursor:pointer;border:1px solid var(--border);object-fit:cover;';
+                                img.loading = 'lazy';
+                                img.addEventListener('click', (e) => {
+                                    e.stopPropagation();
+                                    openLightbox(url);
+                                });
+                                imgContainer.appendChild(img);
+                            });
+                        }
+                    } else {
+                        imgContainer.style.display = 'none';
+                    }
+                });
+                div.appendChild(item);
+            });
+            chat.appendChild(div);
+            scrollToBottom();
+        }
+
+        function addThinking() {
+            const empty = chat.querySelector('.empty-state');
+            if (empty) empty.remove();
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.id = 'thinking-msg';
+            div.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+            chat.appendChild(div);
+            scrollToBottom();
+            return div;
+        }
+
+        function scrollToBottom() {
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function escHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function openLightbox(url) {
+            const lb = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            img.src = url;
+            lb.style.display = 'flex';
+        }
+
+        async function copyToClipboard(text, btn) {
+            try {
+                await navigator.clipboard.writeText(text);
+                btn.textContent = '✅ Скопировано';
+                btn.classList.add('copied');
+            } catch {
+                // Fallback for non-HTTPS/localhost
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try {
+                    document.execCommand('copy');
+                    btn.textContent = '✅ Скопировано';
+                    btn.classList.add('copied');
+                } catch {
+                    btn.textContent = '❌ Не удалось';
+                }
+                document.body.removeChild(ta);
+            }
+            setTimeout(() => {
+                btn.textContent = '📋 Копировать';
+                btn.classList.remove('copied');
+            }, 2000);
+        }
+
+        // === Send question ===
+        async function sendQuestion() {
+            const question = input.value.trim();
+            if (!question || sending) return;
+            sending = true;
+
+            sendBtn.disabled = true;
+            sendBtn.style.display = 'none';
+            cancelBtn.style.display = 'inline-block';
+            cancelBtn.disabled = false;
+            input.disabled = true;
+
+            // Add user message to UI + history
+            addMessage('user', question);
+            history.push({role: 'user', content: question});
+            saveHistory();
+
+            input.value = '';
+            input.style.height = 'auto';
+
+            const thinkingEl = addThinking();
+            const k = parseInt(kInput.value) || 5;
+            const temperature = parseInt(tempSlider.value) / 10;
+            const numPredict = parseInt(tokensSlider.value);
+
+            // Build history for context (last 10 turns)
+            const historyMsgs = [];
+            for (let i = Math.max(0, history.length - 20); i < history.length - 1; i++) {
+                const m = history[i];
+                if (m.role === 'user' || m.role === 'assistant') {
+                    historyMsgs.push({role: m.role, content: m.content});
+                }
+            }
+
+            try {
+                abortController = new AbortController();
+                const resp = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: question,
+                        provider: providerSelect.value,
+                        model: currentModel,
+                        k: k,
+                        temperature: temperature,
+                        num_predict: numPredict,
+                        num_ctx: parseInt(localStorage.getItem('tvhelper_num_ctx') || '8192', 10),
+                        history: historyMsgs,
+                    }),
+                    signal: abortController.signal,
+                });
+
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let responseText = '';
+                let sources = [];
+                let metrics = null;
+                let sourcesReceived = false;
+                let thinkingStarted = false;
+                let thinkingElapsed = 0;
+
+                thinkingEl.remove();
+
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message assistant';
+
+                // We'll build content progressively
+                const bodyDiv = document.createElement('div');
+                msgDiv.appendChild(bodyDiv);
+
+                // Thinking section
+                const thinkingDiv = document.createElement('div');
+                thinkingDiv.className = 'thinking-section';
+                thinkingDiv.style.display = 'none';
+                thinkingDiv.innerHTML = '<div class="thinking-label">🤔 Размышление</div><div class="thinking-text"></div>';
+                msgDiv.appendChild(thinkingDiv);
+
+                // Footer placeholder
+                const footer = document.createElement('div');
+                footer.className = 'msg-footer';
+                const meta = document.createElement('span');
+                meta.className = 'msg-meta';
+                footer.appendChild(meta);
+
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'copy-btn';
+                copyBtn.textContent = '📋 Копировать';
+                footer.appendChild(copyBtn);
+
+                chat.appendChild(msgDiv);
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        try {
+                            const event = JSON.parse(line.slice(6));
+                            if (event.type === 'sources' && !sourcesReceived) {
+                                sourcesReceived = true;
+                                sources = event.data || [];
+                                addSourcesBlock(sources);
+                            } else if (event.type === 'thinking') {
+                                thinkingElapsed++;
+                                if (!thinkingStarted) {
+                                    thinkingStarted = true;
+                                    thinkingDiv.style.display = 'block';
+                                }
+                                const tt = thinkingDiv.querySelector('.thinking-text');
+                                tt.textContent += event.data;
+                                if (thinkingElapsed % 5 === 0) scrollToBottom();
+                            } else if (event.type === 'token') {
+                                // Hide thinking when actual content starts
+                                if (thinkingStarted && event.data.trim()) {
+                                    thinkingDiv.style.display = 'none';
+                                }
+                                responseText += event.data;
+                                try {
+                                    bodyDiv.innerHTML = marked.parse(responseText);
+                                } catch(e) {
+                                    bodyDiv.textContent = responseText;
+                                }
+                                scrollToBottom();
+                            } else if (event.type === 'done') {
+                                metrics = event.data;
+                                const tps = metrics.eval_duration > 0
+                                    ? (metrics.eval_count / (metrics.eval_duration / 1e9)).toFixed(1)
+                                    : '?';
+                                meta.textContent = `⚡ ${metrics.eval_count} токенов • ${tps} т/с`;
+                                copyBtn.addEventListener('click', () => {
+                                    copyToClipboard(responseText, copyBtn);
+                                });
+                                msgDiv.appendChild(footer);
+                            } else if (event.type === 'error') {
+                                responseText += '\n\n[Ошибка: ' + event.data + ']';
+                                bodyDiv.innerHTML = marked.parse(responseText);
+                                scrollToBottom();
+                            }
+                        } catch(e) { /* partial line */ }
+                    }
+                }
+
+                // Save to history
+                history.push({role: 'assistant', content: responseText, sources: sources, metrics: metrics});
+                saveHistory();
+
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    // Remove thinking msg if still there
+                    const thinking = document.getElementById('thinking-msg');
+                    if (thinking) thinking.remove();
+                    addMessage('system', '⏹ Ответ прерван');
+                    history.push({role: 'system', content: '⏹ Ответ прерван'});
+                } else {
+                    console.error(e);
+                    const thinking = document.getElementById('thinking-msg');
+                    if (thinking) thinking.remove();
+                    addMessage('system', '❌ Ошибка: ' + e.message);
+                    history.push({role: 'system', content: '❌ Ошибка: ' + e.message});
+                }
+                saveHistory();
+            } finally {
+                sending = false;
+                sendBtn.disabled = false;
+                sendBtn.style.display = 'inline-block';
+                cancelBtn.style.display = 'none';
+                input.disabled = false;
+                input.focus();
+                abortController = null;
+            }
+        }
+
+        // === Cancel ===
+        cancelBtn.addEventListener('click', () => {
+            if (abortController) { abortController.abort(); abortController = null; }
+        });
+
+        // === Enter to send ===
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendQuestion();
+            }
+        });
+        sendBtn.addEventListener('click', sendQuestion);
+
+        // === Export dialog ===
+        exportBtn.addEventListener('click', () => {
+            let text = '# TVHelper Web Agent — Диалог\n\n';
+            history.forEach(m => {
+                if (m.role === 'user') text += `## Пользователь\n${m.content}\n\n`;
+                else if (m.role === 'assistant') text += `## Ассистент\n${m.content}\n\n`;
+                else text += `## ${m.role}\n${m.content}\n\n`;
+            });
+            const blob = new Blob([text], {type: 'text/markdown'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'tvhelper-dialog.md';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        // === File management ===
+        let allFiles = [];
+
+        async function loadFiles() {
+            const tbody = document.getElementById('files-tbody');
+            tbody.innerHTML = '<tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">Загрузка...</td></tr>';
+            try {
+                const resp = await fetch('/api/files');
+                const data = await resp.json();
+                allFiles = data.files || [];
+                renderFileTable('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">❌ Ошибка загрузки</td></tr>';
+            }
+        }
+
+        function renderFileTable(query) {
+            const tbody = document.getElementById('files-tbody');
+            const search = query.toLowerCase();
+            const filtered = search ? allFiles.filter(f => f.name.toLowerCase().includes(search)) : allFiles;
+            document.getElementById('files-count').textContent = `${filtered.length} / ${allFiles.length}`;
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">Файлы не найдены</td></tr>';
+                return;
+            }
+            tbody.innerHTML = filtered.map(f =>
+                `<tr>
+                    <td style="padding:6px 10px; border-bottom:1px solid var(--border); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:500px;" title="${f.name}">📄 ${f.name}</td>
+                    <td style="padding:6px 10px; border-bottom:1px solid var(--border); text-align:right; color:var(--text-dim); white-space:nowrap;">${f.size_human || ''}</td>
+                </tr>`
+            ).join('');
+        }
+
+        document.getElementById('files-btn').addEventListener('click', () => {
+            document.getElementById('files-modal').style.display = 'flex';
+            loadFiles();
+        });
+        document.getElementById('files-close').addEventListener('click', () => {
+            document.getElementById('files-modal').style.display = 'none';
+        });
+        document.getElementById('files-modal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('files-modal'))
+                document.getElementById('files-modal').style.display = 'none';
+        });
+        document.getElementById('files-search').addEventListener('input', (e) => {
+            renderFileTable(e.target.value);
+        });
+
+        // === Upload modal ===
+        let selectedFile = null;
+
+        document.getElementById('upload-btn').addEventListener('click', () => {
+            document.getElementById('upload-modal').style.display = 'flex';
+            document.getElementById('upload-status').style.display = 'none';
+            document.getElementById('upload-submit-btn').style.display = 'inline-block';
+            document.getElementById('upload-submit-btn').disabled = true;
+            document.getElementById('upload-reindex-btn').style.display = 'none';
+            document.getElementById('upload-cancel-btn').style.display = 'none';
+            document.getElementById('file-name').textContent = '';
+            selectedFile = null;
+        });
+        document.getElementById('upload-close').addEventListener('click', () => {
+            document.getElementById('upload-modal').style.display = 'none';
+        });
+        document.getElementById('upload-modal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('upload-modal'))
+                document.getElementById('upload-modal').style.display = 'none';
+        });
+
+        document.getElementById('file-select-btn').addEventListener('click', () => {
+            document.getElementById('file-input').click();
+        });
+        document.getElementById('file-input').addEventListener('change', (e) => {
+            selectedFile = e.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-name').textContent = `📄 ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(1)} MB)`;
+                document.getElementById('upload-submit-btn').disabled = false;
+                document.getElementById('upload-status').style.display = 'none';
+            } else {
+                document.getElementById('file-name').textContent = '';
+                document.getElementById('upload-submit-btn').disabled = true;
+            }
+        });
+
+        document.getElementById('upload-submit-btn').addEventListener('click', async () => {
+            if (!selectedFile) return;
+            const btn = document.getElementById('upload-submit-btn');
+            const status = document.getElementById('upload-status');
+            const resultText = document.getElementById('upload-result-text');
+
+            btn.disabled = true;
+            btn.textContent = '⬆ Загрузка...';
+            status.style.display = 'block';
+            resultText.textContent = '⏳ Загрузка файла...';
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            try {
+                const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (resp.ok) {
+                    resultText.innerHTML = `✅ Файл <strong>${selectedFile.name}</strong> загружен.<br>`;
+                    if (data.already_exists) {
+                        resultText.innerHTML += `⚠️ Файл уже был в базе — дубликат не создан (проверка по хешу).<br>`;
+                    } else {
+                        resultText.innerHTML += `📄 Сохранён в хранилище.<br>`;
+                    }
+                    resultText.innerHTML += `🔄 <strong>Нажмите «Переиндексировать»</strong>, чтобы добавить содержимое в поисковый индекс.`;
+                    btn.style.display = 'none';
+                    document.getElementById('upload-reindex-btn').style.display = 'inline-block';
+                    document.getElementById('upload-reindex-btn').dataset.file = selectedFile.name;
+                } else {
+                    resultText.textContent = `❌ Ошибка: ${data.detail || data.message || 'Неизвестная ошибка'}`;
+                    btn.disabled = false;
+                    btn.textContent = '⬆ Загрузить';
+                }
+            } catch (e) {
+                resultText.textContent = `❌ Ошибка сети: ${e.message}`;
+                btn.disabled = false;
+                btn.textContent = '⬆ Загрузить';
+            }
+        });
+
+        document.getElementById('upload-reindex-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('upload-reindex-btn');
+            const status = document.getElementById('upload-status');
+            const resultText = document.getElementById('upload-result-text');
+
+            btn.disabled = true;
+            btn.textContent = '🔄 Индексация...';
+            resultText.innerHTML += `<br>⏳ Запуск индексации...`;
+
+            try {
+                const resp = await fetch('/api/ingest', { method: 'POST' });
+                const data = await resp.json();
+                if (resp.ok) {
+                    resultText.innerHTML += `<br>✅ Индексация завершена: ${data.message || 'OK'}.`;
+                    if (data.chunks) resultText.innerHTML += ` <strong>${data.chunks}</strong> чанков.`;
+                    document.getElementById('upload-cancel-btn').style.display = 'inline-block';
+                    btn.textContent = '🔄 Переиндексировать';
+                    btn.disabled = false;
+                } else {
+                    resultText.innerHTML += `<br>❌ Ошибка индексации: ${data.detail || data.message || 'Неизвестная ошибка'}`;
+                    btn.textContent = '🔄 Переиндексировать';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                resultText.innerHTML += `<br>❌ Ошибка сети: ${e.message}`;
+                btn.textContent = '🔄 Переиндексировать';
+                btn.disabled = false;
+            }
+        });
+
+        document.getElementById('upload-cancel-btn').addEventListener('click', () => {
+            document.getElementById('upload-modal').style.display = 'none';
+        });
+
+        // === Help modal ===
+        helpBtn.addEventListener('click', () => {
+            helpModal.style.display = 'flex';
+        });
+        helpClose.addEventListener('click', () => {
+            helpModal.style.display = 'none';
+        });
+        helpModal.addEventListener('click', (e) => {
+            if (e.target === helpModal) helpModal.style.display = 'none';
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (helpModal.style.display === 'flex') helpModal.style.display = 'none';
+                if (document.getElementById('files-modal').style.display === 'flex') document.getElementById('files-modal').style.display = 'none';
+                if (document.getElementById('upload-modal').style.display === 'flex') document.getElementById('upload-modal').style.display = 'none';
+            }
+        });
+
+        // === Clear chat (double-click header) ===
+        document.querySelector('.header h1').addEventListener('dblclick', () => {
+            if (confirm('Очистить историю чата?')) {
+                history = [];
+                saveHistory();
+                chat.innerHTML = '<div class="empty-state"><h2>Задайте вопрос по документации</h2><p>Я ищу ответы в базе знаний SDE Search...</p></div>';
+            }
+        });
+
+        // === Clear chat button ===
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            if (confirm('Очистить историю чата?')) {
+                history = [];
+                saveHistory();
+                chat.innerHTML = '<div class="empty-state"><h2>Задайте вопрос по документации</h2><p>Я ищу ответы в базе знаний SDE Search...</p></div>';
+            }
+        });
+
+        // === Init ===
+        loadHistory();
+        renderHistory();
+        loadModels();
+        refreshStatus();
+        // Показать текущую модель после загрузки
+        setTimeout(() => {
+            if (currentModel) document.getElementById('current-model-label').textContent = '→ ' + currentModel;
+        }, 200);
+        setInterval(loadModels, 30000);
+        setInterval(refreshStatus, 10000);
+    </script>
+</body>
+</html>
