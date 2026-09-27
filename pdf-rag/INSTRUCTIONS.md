@@ -1,12 +1,14 @@
-# Hybrid RAG — сервис гибридного поиска
+|# Hybrid RAG — сервис гибридного поиска (мультиязычный)
 
-Гибридный поиск по технической документации: векторный (ChromaDB + эмбеддинги через Ollama) + BM25 + FlashRank reranker + фильтр по продукту.
+Гибридный поиск по технической документации: векторный (ChromaDB + bge-m3) + BM25 + bge-reranker-v2-m3 на GPU + фильтр по продукту.
+Поддерживает 100+ языков.
 Доступен через HTTP (постоянный сервер) либо как библиотека.
 
 ## Возможности
 
 - Индексация PDF, DOCX, PPTX
-- Гибридный поиск: векторный + BM25 + переранжирование FlashRank
+- Гибридный поиск: векторный + BM25 + переранжирование bge-reranker-v2-m3 на GPU
+- Поддержка 100+ языков (русский, английский, немецкий, французский, китайский...)
 - Постоянный HTTP-сервер (без cold start, ~4 сек на запрос)
 - Инкрементальное добавление — только новые и изменённые файлы (флаг `--incremental`)
 - Метаданные продукта — при добавлении указывается `--product` и `--summary`, описание вшивается в каждый чанк
@@ -37,11 +39,12 @@ pdf-rag/
 | Переменная | По умолчанию | Что задаёт |
 |---|---|---|
 | `CORS_ORIGINS` | `*` (все) | Разрешённые origin через запятую, напр. `http://site1.com,http://site2.com` |
-| `RAG_EMBED_MODEL` | `nomic-embed-text` | Модель эмбеддингов в Ollama |
+| `RAG_EMBED_MODEL` | `bge-m3` | Модель эмбеддингов в Ollama |
+| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Модель реранжинга (CrossEncoder, GPU) |
 | `RAG_OLLAMA_URL` | `http://localhost:11434` | Адрес Ollama для эмбеддингов |
 | `RAG_LLM_MODEL` | `qwen3:8b` | Модель для генерации ответа (через `/v1/chat/completions`) |
 | `RAG_LLM_ENDPOINT` | `http://localhost:11434/v1/chat/completions` | Полный URL OpenAI-совместимого API для LLM |
-| `FLASHRANK_CACHE_DIR` | `~/.cache/flashrank` | Папка кэша FlashRank-модели |
+| `FLASHRANK_CACHE_DIR` | `~/.cache/flashrank` | (не используется с bge-reranker-v2-m3)
 
 Пример `.env` или export перед запуском:
 ```bash
@@ -53,8 +56,8 @@ export RAG_EMBED_MODEL=bge-m3
 
 ### Обязательно
 - **Python 3.13+**
-- **Ollama** с моделью эмбеддингов (`nomic-embed-text`) — порт 11434
-- **FlashRank** (`ms-marco-MiniLM-L-12-v2`) — ONNX, работает на CPU, ~200 MB RAM
+- **Ollama** с моделью эмбеддингов (`bge-m3`) — порт 11434
+- **PyTorch (CUDA)** — для bge-reranker-v2-m3 на GPU
 
 ### Пакеты Python (устанавливаются в .venv)
 ```
@@ -66,7 +69,8 @@ python-pptx
 fastapi
 uvicorn
 llama-index-embeddings-ollama
-flashrank
+sentence-transformers
+torch
 nltk
 python-multipart
 ```
@@ -74,7 +78,7 @@ python-multipart
 ### Важные нюансы по среде
 - **Ollama обязателен** — эмбеддинги генерируются через Ollama, без него поиск не работает.
 - **HTTP-сервер держит всё в памяти** — ChromaDB, BM25, модель ранжирования. Первый запуск может быть медленным из-за загрузки эмбеддинг-модели. После старта — ~4 сек на запрос.
-- **FlashRank работает на CPU** — GPU не требуется, но ~200 MB RAM дополнительно.
+- **bge-reranker-v2-m3 работает на GPU** — требуется CUDA и ~3.5 GB VRAM. В отличие от старого FlashRank (CPU, только английский), новая модель мультиязычная и значительно быстрее на GPU.
 - **nltk punkt** — скачивается автоматически при первом запуске.
 
 ## Как добавить данные
