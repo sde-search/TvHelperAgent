@@ -52,9 +52,15 @@ INGEST_LOG = str(LOG_DIR / "ingestion.jsonl")
 
 _logger = logging.getLogger("pdf-rag-search")
 _logger.setLevel(logging.INFO)
-_fh = logging.FileHandler(str(LOG_DIR / "server.log"))
-_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-_logger.addHandler(_fh)
+_handler_exists = any(
+    isinstance(h, logging.FileHandler) and h.baseFilename.endswith("server.log")
+    for h in _logger.handlers
+)
+if not _handler_exists:
+    _fh = logging.FileHandler(str(LOG_DIR / "server.log"))
+    _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _logger.addHandler(_fh)
+_logger.propagate = False
 
 
 def log_search(query: str, product: str | None, results_count: int, elapsed_ms: int, status: str = "ok"):

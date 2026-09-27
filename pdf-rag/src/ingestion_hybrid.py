@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 import pickle
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 DATA_RAW = Path("data/pdfs_raw")
 DATA_PDFS = Path("data/pdfs")
 CHROMA_DIR = Path("data/chroma")
+EXTRACTED_DIR = Path("data/extracted")
 CHUNK_SIZE = 768
 CHUNK_OVERLAP = 128
 COLLECTION_NAME = "docs"
@@ -77,13 +79,66 @@ def deduplicate_to_flat(target: Path = DATA_PDFS):
     return copied
 
 
+def extract_images_from_pdf(path: Path, source_stem: str) -> int:
+    """Извлекает изображения из PDF, сохраняет в EXTRACTED_DIR/source_stem/page{N}_img{M}.png.
+    Возвращает количество извлечённых картинок."""
+    import fitz
+
+    img_dir = EXTRACTED_DIR / source_stem
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    # Очистка старых картинок для этого source
+    for old in img_dir.glob("*"):
+        old.unlink()
+
+    doc = fitz.open(str(path))
+    count = 0
+    for page_num, page in enumerate(doc, 1):
+        image_list = page.get_images(full=True)
+        for img_idx, img_info in enumerate(image_list):
+            xref = img_info[0]
+            base_image = doc.extract_image(xref)
+            if base_image is None:
+                continue
+            img_bytes = base_image["image"]
+            ext = base_image.get("ext", "png")
+            out_path = img_dir / f"page{page_num}_img{img_idx}.{ext}"
+            out_path.write_bytes(img_bytes)
+            count += 1
+    doc.close()
+    print(f"    Извлечено {count} картинок -> {img_dir}")
+    return count
+
+
+def extract_text_pagewise(path: Path, source_stem: str) -> list[dict]:
+    """Извлекает текст постранично и картинки.
+    Возвращает список: [{text, page_number}, ...] для каждой страницы с текстом."""
+    import fitz
+
+    # Сначала картинки
+    extract_images_from_pdf(path, source_stem)
+
+    doc = fitz.open(str(path))
+    pages = []
+    for page_num, page in enumerate(doc, 1):
+        text = (page.get_text() or "").strip()
+        if text:
+            pages.append({"text": text, "page_number": page_num})
+    doc.close()
+    return pages
+
+
 def extract_text(path: Path) -> str:
     ext = path.suffix.lower()
     if ext == '.pdf':
         try:
-            from pypdf import PdfReader
-            r = PdfReader(str(path))
-            return '\n'.join(p.extract_text() or '' for p in r.pages)
+            import fitz
+            doc = fitz.open(str(path))
+            texts = []
+            for page in doc:
+                texts.append(page.get_text() or '')
+            doc.close()
+            return '\n\n'.join(texts)
         except Exception as e:
             print(f"  [WARN] PDF error {path.name}: {e}")
             return ''
@@ -186,20 +241,45 @@ def index_documents(docs_dir: Path, default_product: str = "", default_summary: 
         if f.suffix.lower() == '.zip':
             continue
         print(f"  [{i}/{total}] {f.name}")
-        text = extract_text(f)
-        if not text.strip():
-            continue
-        chunks = split_text(text, f.name)
-        for chunk_text, chunk_id in chunks:
-            node_id = f"{f.name}_{chunk_id}"
-            all_texts.append(chunk_text)
-            all_metadatas.append({
-                "source": f.name,
-                "chunk": chunk_id,
-                "product": default_product,
-                "summary": default_summary,
-            })
-            all_ids.append(node_id)
+        # PDF с постраничным извлечением + картинки
+        if f.suffix.lower() == '.pdf':
+            try:
+                pages = extract_text_pagewise(f, f.stem)
+            except Exception as e:
+                print(f"  [WARN] Pagewise PDF error {f.name}: {e}")
+                continue
+            for page_data in pages:
+                text = page_data["text"]
+                pn = page_data["page_number"]
+                if not text.strip():
+                    continue
+                chunks = split_text(text, f.name)
+                for chunk_text, chunk_id in chunks:
+                    node_id = f"{f.name}_{pn}_{chunk_id}"
+                    all_texts.append(chunk_text)
+                    all_metadatas.append({
+                        "source": f.name,
+                        "page": pn,
+                        "chunk": chunk_id,
+                        "product": default_product,
+                        "summary": default_summary,
+                    })
+                    all_ids.append(node_id)
+        else:
+            text = extract_text(f)
+            if not text.strip():
+                continue
+            chunks = split_text(text, f.name)
+            for chunk_text, chunk_id in chunks:
+                node_id = f"{f.name}_{chunk_id}"
+                all_texts.append(chunk_text)
+                all_metadatas.append({
+                    "source": f.name,
+                    "chunk": chunk_id,
+                    "product": default_product,
+                    "summary": default_summary,
+                })
+                all_ids.append(node_id)
 
     # --- векторная индексация ---
     batch_size = 32
@@ -313,20 +393,44 @@ def index_incremental(product: str = "", summary: str = ""):
 
     for f in to_process:
         print(f"  Обработка: {f.name}")
-        text = extract_text(f)
-        if not text.strip():
-            continue
-        chunks = split_text(text, f.name)
-        for chunk_text, chunk_id in chunks:
-            node_id = f"{f.name}_{chunk_id}"
-            new_texts.append(chunk_text)
-            new_metadatas.append({
-                "source": f.name,
-                "chunk": chunk_id,
-                "product": product,
-                "summary": summary,
-            })
-            new_ids.append(node_id)
+        if f.suffix.lower() == '.pdf':
+            try:
+                pages = extract_text_pagewise(f, f.stem)
+            except Exception as e:
+                print(f"  [WARN] Pagewise PDF error {f.name}: {e}")
+                continue
+            for page_data in pages:
+                text = page_data["text"]
+                pn = page_data["page_number"]
+                if not text.strip():
+                    continue
+                chunks = split_text(text, f.name)
+                for chunk_text, chunk_id in chunks:
+                    node_id = f"{f.name}_{pn}_{chunk_id}"
+                    new_texts.append(chunk_text)
+                    new_metadatas.append({
+                        "source": f.name,
+                        "page": pn,
+                        "chunk": chunk_id,
+                        "product": product,
+                        "summary": summary,
+                    })
+                    new_ids.append(node_id)
+        else:
+            text = extract_text(f)
+            if not text.strip():
+                continue
+            chunks = split_text(text, f.name)
+            for chunk_text, chunk_id in chunks:
+                node_id = f"{f.name}_{chunk_id}"
+                new_texts.append(chunk_text)
+                new_metadatas.append({
+                    "source": f.name,
+                    "chunk": chunk_id,
+                    "product": product,
+                    "summary": summary,
+                })
+                new_ids.append(node_id)
 
     # --- эмбеддинги и добавление в ChromaDB ---
     if new_texts:
