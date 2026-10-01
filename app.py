@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """TVHelper Web Agent — RAG-агент с веб-интерфейсом и поддержкой внешних API."""
 
+import asyncio
 import json
 import os
+import re
 import subprocess
+import urllib.parse
 from pathlib import Path
 
 import httpx
@@ -62,6 +65,85 @@ SEARCH_SERVER_BASE = os.getenv("SEARCH_SERVER_BASE", "http://localhost:11436")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.3"))
 DEFAULT_NUM_PREDICT = int(os.getenv("DEFAULT_NUM_PREDICT", "2048"))
 DEFAULT_NUM_CTX = int(os.getenv("DEFAULT_NUM_CTX", "16384"))
+
+# === Web Search ===
+WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "0")
+WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
+WEB_SEARCH_TIMEOUT = int(os.getenv("WEB_SEARCH_TIMEOUT", "10"))
+
+
+# === Web Search (встроенный, без внешних API) ===
+async def _web_search(query: str, max_results: int = 5, timeout: int = 10) -> list[dict]:
+    """Поиск в интернете через DuckDuckGo HTML. Возвращает [{title, url, snippet}, ...]."""
+    if not query or not query.strip():
+        return []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "ru,en;q=0.9",
+    }
+    url = "https://html.duckduckgo.com/html/"
+    params = {"q": query.strip()}
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
+            c.headers.update(headers)
+            r = await c.get(url, params=params)
+            r.raise_for_status()
+            html = r.text
+    except Exception as e:
+        logger.warning(f"Web search request failed: {e}")
+        return []
+
+    results = []
+    # Парсинг результата: ищем блоки result__body или result
+    for block in re.split(r'<div[^>]*class="[^"]*result(?:__body)?[^"]*"[^>]*>', html)[1:]:
+        if len(results) >= max_results:
+            break
+        # URL
+        url_match = re.search(r'href="(https?://[^"]+)"', block[:2000])
+        # Title
+        title_match = re.search(r'<a[^>]+rel="nofollow"[^>]*class="result__a"[^>]*>(.*?)</a>', block, re.DOTALL)
+        # Snippet
+        snippet_match = re.search(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', block, re.DOTALL)
+        # Fallback snippet: text after result__body
+        if not snippet_match:
+            snippet_text = re.sub(r'<[^>]+>', ' ', block[:1000])
+            snippet_text = re.sub(r'\s+', ' ', snippet_text).strip()[:300]
+        else:
+            snippet_text = re.sub(r'<[^>]+>', ' ', snippet_match.group(1))
+            snippet_text = re.sub(r'\s+', ' ', snippet_text).strip()
+
+        title = ""
+        if title_match:
+            title = re.sub(r'<[^>]+>', ' ', title_match.group(1))
+            title = re.sub(r'\s+', ' ', title).strip()
+
+        if url_match:
+            results.append({
+                "title": title or url_match.group(1),
+                "url": url_match.group(1),
+                "snippet": snippet_text,
+            })
+        elif title:
+            results.append({
+                "title": title,
+                "url": "",
+                "snippet": snippet_text,
+            })
+
+    # Второй проход: если ни одного результата, попробуем сырой поиск по ссылкам
+    if not results:
+        for m in re.finditer(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', html):
+            if len(results) >= max_results:
+                break
+            url = m.group(1)
+            title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+            if url and title and not any(r["url"] == url for r in results):
+                results.append({"title": title, "url": url, "snippet": ""})
+
+    logger.info(f"Web search for '{query[:80]}': {len(results)} results")
+    return results
 
 # === Провайдеры LLM ===
 PROVIDERS = []
@@ -397,6 +479,7 @@ async def chat(body: dict):
     num_predict = body.get("num_predict", DEFAULT_NUM_PREDICT)
     num_ctx = body.get("num_ctx", DEFAULT_NUM_CTX)
     history = body.get("history", [])
+    web_search_enabled = body.get("web_search", WEB_SEARCH_ENABLED == "1")
 
     if not question:
         return {"error": "Question is required"}
@@ -452,6 +535,26 @@ async def chat(body: dict):
         context_parts.append(f"[Source: {source} (product: {product}, score: {score})]\n{text}")
 
     context = "\n\n---\n\n".join(context_parts) if context_parts else "Нет релевантного контекста."
+
+    # === Web Search ===
+    web_results_text = ""
+    if web_search_enabled:
+        try:
+            web_results = await _web_search(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
+            if web_results:
+                web_parts = []
+                for wr in web_results:
+                    title = wr.get("title", "")
+                    url = wr.get("url", "")
+                    snippet = wr.get("snippet", "")
+                    web_parts.append(f"[Web: {title}]({url})\n{snippet}")
+                web_results_text = "\n\n---\n\n".join(web_parts)
+                logger.info(f"Web search added {len(web_results)} results")
+        except Exception as e:
+            logger.warning(f"Web search error: {e}")
+
+    if web_results_text:
+        context = context + "\n\n---\n\n=== Результаты веб-поиска ===\n\n" + web_results_text
 
     system_prompt = (
         "Ты — технический ассистент поддержки. У тебя есть база знаний технической документации.\n"
