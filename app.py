@@ -69,81 +69,48 @@ DEFAULT_NUM_CTX = int(os.getenv("DEFAULT_NUM_CTX", "16384"))
 # === Web Search ===
 WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "0")
 WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
-WEB_SEARCH_TIMEOUT = int(os.getenv("WEB_SEARCH_TIMEOUT", "10"))
+WEB_SEARCH_TIMEOUT = int(os.getenv("WEB_SEARCH_TIMEOUT", "15"))
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 
 
-# === Web Search (встроенный, без внешних API) ===
-async def _web_search(query: str, max_results: int = 5, timeout: int = 10) -> list[dict]:
-    """Поиск в интернете через DuckDuckGo HTML. Возвращает [{title, url, snippet}, ...]."""
+# === Web Search (Tavily API) ===
+async def _web_search(query: str, max_results: int = 5, timeout: int = 15) -> list[dict]:
+    """Поиск в интернете через Tavily API. Возвращает [{title, url, snippet, score}, ...]."""
     if not query or not query.strip():
         return []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "ru,en;q=0.9",
-    }
-    url = "https://html.duckduckgo.com/html/"
-    params = {"q": query.strip()}
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as c:
-            c.headers.update(headers)
-            r = await c.get(url, params=params)
-            r.raise_for_status()
-            html = r.text
-    except Exception as e:
-        logger.warning(f"Web search request failed: {e}")
+    api_key = TAVILY_API_KEY
+    if not api_key:
+        logger.warning("TAVILY_API_KEY not set, web search disabled")
         return []
-
-    results = []
-    # Парсинг результата: ищем блоки result__body или result
-    for block in re.split(r'<div[^>]*class="[^"]*result(?:__body)?[^"]*"[^>]*>', html)[1:]:
-        if len(results) >= max_results:
-            break
-        # URL
-        url_match = re.search(r'href="(https?://[^"]+)"', block[:2000])
-        # Title
-        title_match = re.search(r'<a[^>]+rel="nofollow"[^>]*class="result__a"[^>]*>(.*?)</a>', block, re.DOTALL)
-        # Snippet
-        snippet_match = re.search(r'<a[^>]*class="result__snippet"[^>]*>(.*?)</a>', block, re.DOTALL)
-        # Fallback snippet: text after result__body
-        if not snippet_match:
-            snippet_text = re.sub(r'<[^>]+>', ' ', block[:1000])
-            snippet_text = re.sub(r'\s+', ' ', snippet_text).strip()[:300]
-        else:
-            snippet_text = re.sub(r'<[^>]+>', ' ', snippet_match.group(1))
-            snippet_text = re.sub(r'\s+', ' ', snippet_text).strip()
-
-        title = ""
-        if title_match:
-            title = re.sub(r'<[^>]+>', ' ', title_match.group(1))
-            title = re.sub(r'\s+', ' ', title).strip()
-
-        if url_match:
-            results.append({
-                "title": title or url_match.group(1),
-                "url": url_match.group(1),
-                "snippet": snippet_text,
-            })
-        elif title:
-            results.append({
-                "title": title,
-                "url": "",
-                "snippet": snippet_text,
-            })
-
-    # Второй проход: если ни одного результата, попробуем сырой поиск по ссылкам
-    if not results:
-        for m in re.finditer(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', html):
-            if len(results) >= max_results:
-                break
-            url = m.group(1)
-            title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-            if url and title and not any(r["url"] == url for r in results):
-                results.append({"title": title, "url": url, "snippet": ""})
-
-    logger.info(f"Web search for '{query[:80]}': {len(results)} results")
-    return results
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": query.strip(),
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                    "include_answer": False,
+                    "include_raw_content": False,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            results = data.get("results", [])
+            out = []
+            for item in results:
+                out.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("content", ""),
+                    "score": item.get("score", 0),
+                })
+            logger.info(f"Tavily search for '{query[:80]}': {len(out)} results")
+            return out
+    except Exception as e:
+        logger.warning(f"Tavily search failed: {e}")
+        return []
 
 # === Провайдеры LLM ===
 PROVIDERS = []
@@ -502,20 +469,18 @@ async def chat(body: dict):
     if not provider:
         return {"error": f"Provider '{provider_id}' not found"}
 
-    # RAG search — используем исходный вопрос как есть
-    search_query = question
-
-    # RAG search
+    # === RAG search ===
+    rag_context = ""
+    rag_sources = []
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(SEARCH_URL, params={"query": search_query, "k": k})
+            r = await c.get(SEARCH_URL, params={"query": question, "k": k})
             r.raise_for_status()
             search_data = r.json()
     except Exception as e:
         return {"error": f"Search failed: {e}"}
 
     results = search_data.get("results", [])
-    sources = []
     context_parts = []
     for r_item in results:
         text = r_item.get("text", "")
@@ -525,19 +490,21 @@ async def chat(body: dict):
         images_raw = r_item.get("images", [])
         images = [f"{SEARCH_SERVER_BASE}{img}" for img in images_raw] if images_raw else []
         page = r_item.get("page")
-        sources.append({
+        context_parts.append(f"[Source: {source} (product: {product}, score: {score})]\n{text}")
+        rag_sources.append({
             "source": source,
             "product": product,
             "score": round(score, 3),
             "images": images,
             "page": page,
         })
-        context_parts.append(f"[Source: {source} (product: {product}, score: {score})]\n{text}")
 
-    context = "\n\n---\n\n".join(context_parts) if context_parts else "Нет релевантного контекста."
+    if context_parts:
+        rag_context = "\n\n---\n\n".join(context_parts)
 
     # === Web Search ===
-    web_results_text = ""
+    web_context = ""
+    web_sources = []
     if web_search_enabled:
         try:
             web_results = await _web_search(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
@@ -548,26 +515,57 @@ async def chat(body: dict):
                     url = wr.get("url", "")
                     snippet = wr.get("snippet", "")
                     web_parts.append(f"[Web: {title}]({url})\n{snippet}")
-                web_results_text = "\n\n---\n\n".join(web_parts)
+                web_context = "\n\n---\n\n".join(web_parts)
+                web_sources = [{
+                    "source": wr.get("url", ""),
+                    "product": wr.get("title", ""),
+                    "score": round(wr.get("score", 1.0), 3),
+                    "images": [],
+                    "page": None,
+                } for wr in web_results]
                 logger.info(f"Web search added {len(web_results)} results")
         except Exception as e:
             logger.warning(f"Web search error: {e}")
 
-    if web_results_text:
-        context = context + "\n\n---\n\n=== Результаты веб-поиска ===\n\n" + web_results_text
+    # === Собираем контекст вместе — с урезанием RAG если есть веб ===
+    # При веб-поиске берём не больше 2 чанков RAG, каждый до 500 символов
+    parts = []
+    if web_context:
+        parts.append("=== Результаты веб-поиска ===\n" + web_context)
+    if rag_context:
+        rag_truncated = context_parts[:2] if web_context else context_parts
+        rag_short = []
+        for p in rag_truncated:
+            idx = p.find("\n", p.index("]") + 1) if "]" in p else -1
+            if idx > 0:
+                head = p[:idx + 501]
+                body = head if len(p) < idx + 500 else head[:idx + 500] + "..."
+            else:
+                body = p[:500]
+            rag_short.append(body)
+        parts.append("=== Техническая документация ===\n" + "\n\n---\n\n".join(rag_short))
+    context = "\n\n".join(parts) if parts else "Нет релевантного контекста."
+
+    # sources для UI: если есть веб-результаты — только веб (RAG в контекст, но в UI не показываем иррелевант)
+    if web_sources:
+        sources = web_sources
+    else:
+        sources = rag_sources[:5]
 
     system_prompt = (
-        "Ты — технический ассистент поддержки. У тебя есть база знаний технической документации.\n"
-        "Отвечай на вопрос пользователя ТОЛЬКО на основе предоставленного контекста.\n"
-        "Выдавай максимально полную информацию из документов — не сокращай, не урезай.\n"
-        "Если контекста недостаточно — так и скажи.\n"
-        "Обязательно указывай имя файла-источника и название продукта.\n"
-        "Можешь приводить цитаты и технические детали из документации."
+        "Ты — технический ассистент поддержки. У тебя два источника информации:\n"
+        "1) Техническая документация (раздел «=== Техническая документация ===»).\n"
+        "2) Результаты веб-поиска (раздел «=== Результаты веб-поиска ===»).\n\n"
+        "Правила:\n"
+        "- Если в контексте есть раздел «=== Результаты веб-поиска ===», используй его как "
+        "приоритетный для актуальной информации (курсы, даты, события).\n"
+        "- Документацию используй для технических деталей.\n"
+        "- Всегда указывай источники: для документации — имя файла, для веба — URL.\n"
+        "- Если ответ можно дать только из одного источника — ссылайся на него.\n"
+        "- Выдавай максимально полную информацию."
     )
 
-    # Контекст в user message (не в system), чтобы все модели видели документы
-    # Qwen, Gemma, Llama, Phi, DeepSeek — все стабильно читают контекст из последнего user сообщения
-    user_content = f"Контекст:\n{context}\n\n---\n\nИспользуя ТОЛЬКО контекст выше, ответь на вопрос:\n{question}"
+    user_content = f"Контекст:\n{context}\n\nВопрос: {question}"
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
@@ -626,6 +624,7 @@ async def _stream_ollama(provider, model, messages, temperature, num_predict, nu
             "temperature": temperature,
             "num_predict": num_predict,
             "num_ctx": num_ctx,
+            "thinking": False,
         },
     }
     try:
@@ -642,8 +641,6 @@ async def _stream_ollama(provider, model, messages, temperature, num_predict, nu
                         thinking = msg.get("thinking", "")
                         if content:
                             yield f"data: {json.dumps({'type': 'token', 'data': content}, ensure_ascii=False)}\n\n"
-                        elif thinking:
-                            yield f"data: {json.dumps({'type': 'thinking', 'data': thinking}, ensure_ascii=False)}\n\n"
                         if chunk.get("done", False):
                             done_data = {
                                 "total_duration": chunk.get("total_duration", 0),
