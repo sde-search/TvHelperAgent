@@ -8,9 +8,10 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -18,6 +19,7 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 load_dotenv(BASE_DIR / ".env")
 
 app = FastAPI(title="TVHelper Web Agent")
+app.mount("/static", StaticFiles(directory=str(TEMPLATES_DIR)), name="static")
 import logging
 import sys
 
@@ -56,6 +58,7 @@ MAX_K = int(os.getenv("MAX_K", "20"))
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 2.0
 SEARCH_URL = os.getenv("SEARCH_URL", "http://localhost:11436/search")
+SEARCH_SERVER_BASE = os.getenv("SEARCH_SERVER_BASE", "http://localhost:11436")
 DEFAULT_TEMPERATURE = float(os.getenv("DEFAULT_TEMPERATURE", "0.3"))
 DEFAULT_NUM_PREDICT = int(os.getenv("DEFAULT_NUM_PREDICT", "2048"))
 DEFAULT_NUM_CTX = int(os.getenv("DEFAULT_NUM_CTX", "16384"))
@@ -229,39 +232,6 @@ def _recommend_presets(model_size_bytes: int, max_output: int, is_ollama: bool =
 REWRITE_MODEL = os.getenv("REWRITE_MODEL", "")
 
 
-async def _rewrite_query(question: str, history: list, ollama_url: str, model: str) -> str:
-    """Переформулирует вопрос в самостоятельный поисковый запрос на основе истории диалога."""
-    if not history:
-        return question
-    recent = history[-4:] if len(history) >= 4 else history
-    history_text = "\n".join(
-        f"{'Пользователь' if m['role'] == 'user' else 'Ассистент'}: {m.get('content', '')[:200]}"
-        for m in recent
-    )
-    prompt = (
-        "На основе истории диалога преобразуй последний вопрос пользователя "
-        "в самостоятельный поисковый запрос (1-3 слова).\n\n"
-        f"{history_text}\n\n"
-        "Поисковый запрос:"
-    )
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-        "options": {"num_predict": 60, "temperature": 0, "num_ctx": 2048},
-    }
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(f"{ollama_url}/api/chat", json=payload)
-            r.raise_for_status()
-            data = r.json()
-            rewritten = data.get("message", {}).get("content", "").strip()
-            if rewritten:
-                logger.info(f"→ rewrite: '{question}' → '{rewritten}'")
-                return rewritten
-    except Exception as e:
-        logger.warning(f"rewrite failed: {e}")
-    return question
 
 
 @app.get("/api/status")
@@ -321,6 +291,82 @@ async def activate_model(body: dict):
         return {"error": "Cannot connect to Ollama (is it running?)"}
 
 
+# ======================= File Management =======================
+
+@app.get("/api/files")
+async def list_indexed_files(search: str = ""):
+    """Прокси к search_server: список проиндексированных файлов."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{SEARCH_SERVER_BASE}/files")
+            r.raise_for_status()
+            data = r.json()
+    except httpx.ConnectError:
+        return {"files": [], "count": 0, "error": "Search server недоступен"}
+    except Exception as e:
+        return {"files": [], "count": 0, "error": str(e)}
+
+    files = data.get("files", [])
+    if search:
+        q = search.lower()
+        files = [f for f in files if q in f.get("name", "").lower()]
+    # Добавляем human-readable размер
+    for f in files:
+        kb = f.get("size_kb", 0)
+        if kb >= 1024:
+            f["size_human"] = f"{kb / 1024:.1f} MB"
+        else:
+            f["size_human"] = f"{kb:.0f} KB"
+    return {"files": files, "count": len(files)}
+
+
+@app.post("/api/upload")
+async def upload_document(file: UploadFile = File(...)):
+    """Прокси для загрузки документа в search_server с проверкой дубликатов."""
+    # Валидация расширения
+    ext = Path(file.filename).suffix.lower() if file.filename else ""
+    allowed = {".pdf", ".docx", ".doc", ".txt", ".md", ".rtf"}
+    if ext not in allowed:
+        raise HTTPException(400, f"Неподдерживаемый формат: {ext}. Допустимы: {', '.join(sorted(allowed))}")
+    # Проверка размера (50 MB)
+    contents = await file.read()
+    if len(contents) > 50 * 1024 * 1024:
+        raise HTTPException(413, "Файл слишком большой (макс. 50 MB)")
+    await file.seek(0)
+
+    # Отправка в search_server
+    try:
+        async with httpx.AsyncClient(timeout=60) as c:
+            r = await c.post(
+                f"{SEARCH_SERVER_BASE}/upload",
+                files={"file": (file.filename, contents, file.content_type or "application/octet-stream")},
+            )
+            if r.status_code == 409:
+                return {"status": "duplicate", "message": r.json().get("detail", "Такой файл уже есть в базе")}
+            r.raise_for_status()
+            return {"status": "ok", "message": f"Файл «{file.filename}» загружен", "detail": r.json()}
+    except httpx.ConnectError:
+        raise HTTPException(503, "Search server недоступен")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Ошибка search server: {e.response.text[:200]}")
+
+
+@app.post("/api/ingest")
+async def trigger_ingest():
+    """Запуск инкрементальной индексации новых файлов."""
+    try:
+        async with httpx.AsyncClient(timeout=300) as c:
+            r = await c.post(f"{SEARCH_SERVER_BASE}/ingest", json={"incremental": True})
+            r.raise_for_status()
+            return r.json()
+    except httpx.ConnectError:
+        raise HTTPException(503, "Search server недоступен")
+    except httpx.TimeoutException:
+        return {"status": "timeout", "message": "Индексация запущена, но ещё не завершена"}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(e.response.status_code, f"Ошибка: {e.response.text[:200]}")
+
+
 @app.post("/api/search")
 async def search_only(body: dict):
     query = body.get("query", "").strip()
@@ -373,9 +419,8 @@ async def chat(body: dict):
     if not provider:
         return {"error": f"Provider '{provider_id}' not found"}
 
-    # Query rewrite: переформулируем вопрос с учётом истории (той же моделью)
-    ollama_url = provider.get("base_url", "http://localhost:11434") if provider["type"] == "ollama" else "http://localhost:11434"
-    search_query = await _rewrite_query(question, history, ollama_url, model)
+    # RAG search — используем исходный вопрос как есть
+    search_query = question
 
     # RAG search
     try:
@@ -394,7 +439,16 @@ async def chat(body: dict):
         source = r_item.get("source", "unknown")
         product = r_item.get("product", "")
         score = r_item.get("rerank_score", r_item.get("score", 0))
-        sources.append({"source": source, "product": product, "score": round(score, 3)})
+        images_raw = r_item.get("images", [])
+        images = [f"{SEARCH_SERVER_BASE}{img}" for img in images_raw] if images_raw else []
+        page = r_item.get("page")
+        sources.append({
+            "source": source,
+            "product": product,
+            "score": round(score, 3),
+            "images": images,
+            "page": page,
+        })
         context_parts.append(f"[Source: {source} (product: {product}, score: {score})]\n{text}")
 
     context = "\n\n---\n\n".join(context_parts) if context_parts else "Нет релевантного контекста."

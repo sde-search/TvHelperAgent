@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TVHelper Web Agent</title>
-    <script src="marked.min.js"></script>
+    <script src="/static/marked.min.js"></script>
     <style>
         :root {
             --bg: #0d1117;
@@ -186,6 +186,31 @@
         }
         .source-item.open .source-preview { display: block; }
 
+        .source-images img:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+        }
+
+        .lightbox {
+            display: none; position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.9); z-index: 10000;
+            justify-content: center; align-items: center;
+            cursor: zoom-out;
+        }
+        .lightbox img {
+            max-width: 90vw; max-height: 90vh;
+            border-radius: 8px;
+            box-shadow: 0 0 40px rgba(0,0,0,0.6);
+        }
+        .lightbox-close {
+            position: fixed; top: 20px; right: 30px;
+            font-size: 36px; color: #fff; cursor: pointer;
+            z-index: 10001; opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .lightbox-close:hover { opacity: 1; }
+
         .message.system {
             background: transparent; color: var(--text-dim);
             align-self: center; font-size: 12px; font-style: italic;
@@ -336,6 +361,8 @@
                 <span class="status-item" id="vram-warning" style="display:none; background: rgba(255,100,50,.15); border-color: #f64;"><span class="status-dot err"></span>⚠️ VRAM</span>
             </div>
             <button id="export-btn" class="btn btn-sm" title="Экспорт диалога">📥</button>
+            <button id="files-btn" class="btn btn-sm" title="Список проиндексированных файлов">📁 Файлы</button>
+            <button id="upload-btn" class="btn btn-sm" title="Загрузить документ в базу знаний">📤 Загрузить</button>
             <button id="help-btn" class="btn btn-sm" title="Справка по настройкам">❓</button>
             <button id="clear-btn" class="btn btn-sm btn-danger" title="Очистить чат">🗑️</button>
         </div>
@@ -405,10 +432,79 @@
                     <p>Скачать всю историю чата в Markdown-файл.</p>
                 </div>
                 <div class="help-section">
+                    <h4>📁 Проиндексированные файлы</h4>
+                    <p>Кнопка <strong>📁 Файлы</strong> в панели инструментов открывает таблицу всех документов в базе знаний RAG.</p>
+                    <p>Поиск — фильтрует таблицу по имени файла в реальном времени. Удобно проверить, проиндексирован ли документ, или найти файл по фрагменту названия.</p>
+                </div>
+                <div class="help-section">
+                    <h4>📤 Загрузка документов</h4>
+                    <p>Кнопка <strong>📤 Загрузить</strong> открывает диалог загрузки нового документа в базу знаний RAG.</p>
+                    <p><strong>Форматы:</strong> PDF, DOCX, DOC, TXT, MD, RTF (до 50 MB).</p>
+                    <p>При загрузке файл проверяется по SHA-256 хешу — если такой документ уже есть в базе, дубликат не создаётся.</p>
+                    <p>После успешной загрузки нажмите <strong>🔄 Переиндексировать</strong>, чтобы добавить содержимое нового файла в поисковый индекс (создаются векторные чанки и BM25-индекс).</p>
+                </div>
+                <div class="help-section">
                     <h4>⚠️ VRAM — предупреждение в статус-баре</h4>
                     <p>Если выбранная модель с текущим контекстом не влезает в видеопамять — в статус-баре появляется <strong>⚠️ VRAM</strong>.</p>
                     <p>При наведении — подсказка: сколько VRAM нужно модели и сколько свободно. Если предупреждение активно — возможны тормоза из-за выгрузки слоёв на CPU.</p>
                     <p>Расчёт приблизительный для Q4-моделей. Облачные провайдеры не проверяются.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Files Modal -->
+    <div id="files-modal" class="help-modal" style="display:none;">
+        <div class="help-modal-content" style="max-width: 720px;">
+            <div class="help-modal-header">
+                <span class="help-modal-title">📁 Проиндексированные файлы</span>
+                <button id="files-close" class="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div style="display:flex; gap:8px; margin-bottom:12px;">
+                    <input type="text" id="files-search" placeholder="Поиск по имени файла..." style="flex:1; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:var(--radius); padding:6px 10px; font-size:13px; outline:none;">
+                    <span id="files-count" style="font-size:12px; color:var(--text-dim); align-self:center; white-space:nowrap;"></span>
+                </div>
+                <div id="files-table-wrapper" style="max-height:50vh; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius);">
+                    <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead style="position:sticky; top:0; background:var(--surface);">
+                            <tr>
+                                <th style="padding:8px 10px; text-align:left; border-bottom:1px solid var(--border); color:var(--text-dim); font-weight:500;">Имя файла</th>
+                                <th style="padding:8px 10px; text-align:right; border-bottom:1px solid var(--border); color:var(--text-dim); font-weight:500; width:80px;">Размер</th>
+                            </tr>
+                        </thead>
+                        <tbody id="files-tbody">
+                            <tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">Загрузка...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="help-modal" style="display:none;">
+        <div class="help-modal-content" style="max-width: 500px;">
+            <div class="help-modal-header">
+                <span class="help-modal-title">📤 Загрузить документ</span>
+                <button id="upload-close" class="help-close">&times;</button>
+            </div>
+            <div class="help-modal-body">
+                <div class="help-section">
+                    <h4>Выберите файл</h4>
+                    <p>Поддерживаются: PDF, DOCX, DOC, TXT, MD, RTF (макс. 50 MB)</p>
+                    <input type="file" id="file-input" accept=".pdf,.docx,.doc,.txt,.md,.rtf" style="display:none;">
+                    <button id="file-select-btn" class="btn btn-sm" style="margin-top:8px;">📂 Выбрать файл</button>
+                    <span id="file-name" style="margin-left:8px; font-size:12px; color:var(--text-dim);"></span>
+                </div>
+                <div class="help-section" id="upload-status" style="display:none;">
+                    <h4>📋 Результат</h4>
+                    <p id="upload-result-text" style="font-size:13px;"></p>
+                </div>
+                <div style="display:flex; gap:8px; justify-content:flex-end;">
+                    <button id="upload-cancel-btn" class="btn btn-sm btn-danger" style="display:none;">✕ Закрыть</button>
+                    <button id="upload-submit-btn" class="btn btn-sm" disabled>⬆ Загрузить</button>
+                    <button id="upload-reindex-btn" class="btn btn-sm" style="display:none; background:var(--green);" title="После загрузки нужно переиндексировать">🔄 Переиндексировать</button>
                 </div>
             </div>
         </div>
@@ -425,6 +521,12 @@
         <textarea id="question-input" rows="1" placeholder="Введите ваш вопрос..." autofocus></textarea>
         <button id="send-btn" class="btn">➤ Отправить</button>
         <button id="cancel-btn" class="btn btn-danger" style="display:none;">✕</button>
+    </div>
+
+    <!-- Lightbox -->
+    <div class="lightbox" id="lightbox" onclick="this.style.display='none'">
+        <span class="lightbox-close" onclick="document.getElementById('lightbox').style.display='none'">&times;</span>
+        <img id="lightbox-img" src="" alt="">
     </div>
 
     <script>
@@ -787,14 +889,37 @@
                 const item = document.createElement('div');
                 item.className = 'source-item';
                 const snippet = s.snippet ? escHtml(s.snippet.slice(0, 300)) : '';
+                const pageStr = s.page ? ` стр.${s.page}` : '';
                 item.innerHTML = `
                     <span class="source-score">${s.score.toFixed(3)}</span>
-                    <span class="source-name">${escHtml(s.source)}</span>
+                    <span class="source-name">${escHtml(s.source)}${pageStr}</span>
                     <span style="color:var(--text-dim);font-size:11px;">${escHtml(s.product)}</span>
                     <div class="source-preview">${snippet}</div>
+                    <div class="source-images" style="display:none;margin-top:8px;"></div>
                 `;
                 item.addEventListener('click', () => {
                     item.classList.toggle('open');
+                    const imgContainer = item.querySelector('.source-images');
+                    if (item.classList.contains('open') && s.images && s.images.length > 0) {
+                        imgContainer.style.display = 'flex';
+                        imgContainer.style.flexWrap = 'wrap';
+                        imgContainer.style.gap = '6px';
+                        if (!imgContainer.querySelector('img')) {
+                            s.images.forEach(url => {
+                                const img = document.createElement('img');
+                                img.src = url;
+                                img.style.cssText = 'max-width:180px;max-height:140px;border-radius:6px;cursor:pointer;border:1px solid var(--border);object-fit:cover;';
+                                img.loading = 'lazy';
+                                img.addEventListener('click', (e) => {
+                                    e.stopPropagation();
+                                    openLightbox(url);
+                                });
+                                imgContainer.appendChild(img);
+                            });
+                        }
+                    } else {
+                        imgContainer.style.display = 'none';
+                    }
                 });
                 div.appendChild(item);
             });
@@ -822,6 +947,13 @@
             const d = document.createElement('div');
             d.textContent = str;
             return d.innerHTML;
+        }
+
+        function openLightbox(url) {
+            const lb = document.getElementById('lightbox');
+            const img = document.getElementById('lightbox-img');
+            img.src = url;
+            lb.style.display = 'flex';
         }
 
         async function copyToClipboard(text, btn) {
@@ -977,7 +1109,11 @@
                                     thinkingDiv.style.display = 'none';
                                 }
                                 responseText += event.data;
-                                bodyDiv.innerHTML = marked.parse(responseText);
+                                try {
+                                    bodyDiv.innerHTML = marked.parse(responseText);
+                                } catch(e) {
+                                    bodyDiv.textContent = responseText;
+                                }
                                 scrollToBottom();
                             } else if (event.type === 'done') {
                                 metrics = event.data;
@@ -1059,6 +1195,164 @@
             URL.revokeObjectURL(url);
         });
 
+        // === File management ===
+        let allFiles = [];
+
+        async function loadFiles() {
+            const tbody = document.getElementById('files-tbody');
+            tbody.innerHTML = '<tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">Загрузка...</td></tr>';
+            try {
+                const resp = await fetch('/api/files');
+                const data = await resp.json();
+                allFiles = data.files || [];
+                renderFileTable('');
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">❌ Ошибка загрузки</td></tr>';
+            }
+        }
+
+        function renderFileTable(query) {
+            const tbody = document.getElementById('files-tbody');
+            const search = query.toLowerCase();
+            const filtered = search ? allFiles.filter(f => f.name.toLowerCase().includes(search)) : allFiles;
+            document.getElementById('files-count').textContent = `${filtered.length} / ${allFiles.length}`;
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="2" style="padding:20px; text-align:center; color:var(--text-dim);">Файлы не найдены</td></tr>';
+                return;
+            }
+            tbody.innerHTML = filtered.map(f =>
+                `<tr>
+                    <td style="padding:6px 10px; border-bottom:1px solid var(--border); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:500px;" title="${f.name}">📄 ${f.name}</td>
+                    <td style="padding:6px 10px; border-bottom:1px solid var(--border); text-align:right; color:var(--text-dim); white-space:nowrap;">${f.size_human || ''}</td>
+                </tr>`
+            ).join('');
+        }
+
+        document.getElementById('files-btn').addEventListener('click', () => {
+            document.getElementById('files-modal').style.display = 'flex';
+            loadFiles();
+        });
+        document.getElementById('files-close').addEventListener('click', () => {
+            document.getElementById('files-modal').style.display = 'none';
+        });
+        document.getElementById('files-modal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('files-modal'))
+                document.getElementById('files-modal').style.display = 'none';
+        });
+        document.getElementById('files-search').addEventListener('input', (e) => {
+            renderFileTable(e.target.value);
+        });
+
+        // === Upload modal ===
+        let selectedFile = null;
+
+        document.getElementById('upload-btn').addEventListener('click', () => {
+            document.getElementById('upload-modal').style.display = 'flex';
+            document.getElementById('upload-status').style.display = 'none';
+            document.getElementById('upload-submit-btn').style.display = 'inline-block';
+            document.getElementById('upload-submit-btn').disabled = true;
+            document.getElementById('upload-reindex-btn').style.display = 'none';
+            document.getElementById('upload-cancel-btn').style.display = 'none';
+            document.getElementById('file-name').textContent = '';
+            selectedFile = null;
+        });
+        document.getElementById('upload-close').addEventListener('click', () => {
+            document.getElementById('upload-modal').style.display = 'none';
+        });
+        document.getElementById('upload-modal').addEventListener('click', (e) => {
+            if (e.target === document.getElementById('upload-modal'))
+                document.getElementById('upload-modal').style.display = 'none';
+        });
+
+        document.getElementById('file-select-btn').addEventListener('click', () => {
+            document.getElementById('file-input').click();
+        });
+        document.getElementById('file-input').addEventListener('change', (e) => {
+            selectedFile = e.target.files[0];
+            if (selectedFile) {
+                document.getElementById('file-name').textContent = `📄 ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(1)} MB)`;
+                document.getElementById('upload-submit-btn').disabled = false;
+                document.getElementById('upload-status').style.display = 'none';
+            } else {
+                document.getElementById('file-name').textContent = '';
+                document.getElementById('upload-submit-btn').disabled = true;
+            }
+        });
+
+        document.getElementById('upload-submit-btn').addEventListener('click', async () => {
+            if (!selectedFile) return;
+            const btn = document.getElementById('upload-submit-btn');
+            const status = document.getElementById('upload-status');
+            const resultText = document.getElementById('upload-result-text');
+
+            btn.disabled = true;
+            btn.textContent = '⬆ Загрузка...';
+            status.style.display = 'block';
+            resultText.textContent = '⏳ Загрузка файла...';
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            try {
+                const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (resp.ok) {
+                    resultText.innerHTML = `✅ Файл <strong>${selectedFile.name}</strong> загружен.<br>`;
+                    if (data.already_exists) {
+                        resultText.innerHTML += `⚠️ Файл уже был в базе — дубликат не создан (проверка по хешу).<br>`;
+                    } else {
+                        resultText.innerHTML += `📄 Сохранён в хранилище.<br>`;
+                    }
+                    resultText.innerHTML += `🔄 <strong>Нажмите «Переиндексировать»</strong>, чтобы добавить содержимое в поисковый индекс.`;
+                    btn.style.display = 'none';
+                    document.getElementById('upload-reindex-btn').style.display = 'inline-block';
+                    document.getElementById('upload-reindex-btn').dataset.file = selectedFile.name;
+                } else {
+                    resultText.textContent = `❌ Ошибка: ${data.detail || data.message || 'Неизвестная ошибка'}`;
+                    btn.disabled = false;
+                    btn.textContent = '⬆ Загрузить';
+                }
+            } catch (e) {
+                resultText.textContent = `❌ Ошибка сети: ${e.message}`;
+                btn.disabled = false;
+                btn.textContent = '⬆ Загрузить';
+            }
+        });
+
+        document.getElementById('upload-reindex-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('upload-reindex-btn');
+            const status = document.getElementById('upload-status');
+            const resultText = document.getElementById('upload-result-text');
+
+            btn.disabled = true;
+            btn.textContent = '🔄 Индексация...';
+            resultText.innerHTML += `<br>⏳ Запуск индексации...`;
+
+            try {
+                const resp = await fetch('/api/ingest', { method: 'POST' });
+                const data = await resp.json();
+                if (resp.ok) {
+                    resultText.innerHTML += `<br>✅ Индексация завершена: ${data.message || 'OK'}.`;
+                    if (data.chunks) resultText.innerHTML += ` <strong>${data.chunks}</strong> чанков.`;
+                    document.getElementById('upload-cancel-btn').style.display = 'inline-block';
+                    btn.textContent = '🔄 Переиндексировать';
+                    btn.disabled = false;
+                } else {
+                    resultText.innerHTML += `<br>❌ Ошибка индексации: ${data.detail || data.message || 'Неизвестная ошибка'}`;
+                    btn.textContent = '🔄 Переиндексировать';
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                resultText.innerHTML += `<br>❌ Ошибка сети: ${e.message}`;
+                btn.textContent = '🔄 Переиндексировать';
+                btn.disabled = false;
+            }
+        });
+
+        document.getElementById('upload-cancel-btn').addEventListener('click', () => {
+            document.getElementById('upload-modal').style.display = 'none';
+        });
+
         // === Help modal ===
         helpBtn.addEventListener('click', () => {
             helpModal.style.display = 'flex';
@@ -1070,8 +1364,10 @@
             if (e.target === helpModal) helpModal.style.display = 'none';
         });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && helpModal.style.display === 'flex') {
-                helpModal.style.display = 'none';
+            if (e.key === 'Escape') {
+                if (helpModal.style.display === 'flex') helpModal.style.display = 'none';
+                if (document.getElementById('files-modal').style.display === 'flex') document.getElementById('files-modal').style.display = 'none';
+                if (document.getElementById('upload-modal').style.display === 'flex') document.getElementById('upload-modal').style.display = 'none';
             }
         });
 
