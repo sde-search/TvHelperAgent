@@ -53,6 +53,25 @@ cloudflared tunnel --url http://localhost:8080
 | `/api/search` | POST | Только поиск по RAG. Валидирует query (max 8192), k (1–20) |
 | `/api/status` | GET | Статус GPU, Ollama, search_server |
 | `/api/activate-model` | POST | Принудительная загрузка модели в Ollama. Валидирует model (str, non-empty, max 256) |
+| `/api/chat` | POST | Доп. параметры: `search_backend` (tavily/searxng/off), `k` (1–20), `temperature` (0–2), `num_predict`, `num_ctx` |
+
+## Веб-поиск
+
+Поддерживаются три режима (поле `search_backend` в запросе `/api/chat` или выбор в UI):
+
+| Режим | Описание |
+|-------|----------|
+| `tavily` | Поиск через Tavily API (требуется `TAVILY_API_KEY` в `.env`). **По умолчанию** при `WEB_SEARCH_ENABLED=1` |
+| `searxng` | Поиск через локальный SearXNG (по умолч. `http://127.0.0.1:8888`, настраивается `SEARXNG_BASE_URL`) |
+| `off` | Без веб-поиска |
+
+При `WEB_SEARCH_ENABLED=0` (или отсутствии) режим по умолчанию — `off`.  
+При ошибке Tavily — автоматический fallback на SearXNG.
+
+## PDF документы
+
+PDF-файлы монтируются на `/docs/` из `PDFS_DIR` (по умолч. `/home/hermes/share_pdf-rag/pdf-rag/data/pdfs/`).  
+В каждом RAG-источнике в ответе `/api/chat` есть поле `pdf_url` — прямая ссылка на PDF для скачивания.
 
 ## Провайдеры LLM
 
