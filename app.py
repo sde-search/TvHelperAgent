@@ -123,6 +123,36 @@ async def _web_search(query: str, max_results: int = 5, timeout: int = 15) -> li
 
 
 # === Web Search (SearXNG) ===
+_GARBAGE_TITLE_PATTERNS = re.compile(
+    r'^(error|404|not found|access denied|forbidden|redirect|loading|'
+    r'just a moment|please wait|attention required|verify|bot|captcha|'
+    r'503|502|500|page not found|this page|sorry|enable javascript|'
+    r'javascript required|реклама|купить|продажа|цена|магазин|интернет-магазин|'
+    r'\[pdf\]|\[doc\]|download)', re.I
+)
+_GARBAGE_DOMAINS = {
+    'youtube.com', 'youtu.be', 'facebook.com', 'instagram.com',
+    'twitter.com', 'x.com', 'tiktok.com', 'pinterest.com',
+    'reddit.com', 'linkedin.com', 'habr.com',
+    'market.yandex.ru', 'ozon.ru', 'wildberries.ru',
+    'aliexpress.com', 'avito.ru',
+}
+
+
+def _clean_url(url: str) -> str:
+    """Убирает tracking-параметры и нормализует URL."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    # Дропаем utm_*, fbclid, ref, и пр tracking
+    clean = parsed._replace(
+        query='&'.join(
+            kv for kv in (parsed.query.split('&') if parsed.query else [])
+            if not kv.startswith(('utm_', 'fbclid', 'gclid', 'ref', 'source', 'si'))
+        )
+    )
+    return urlunparse(clean).rstrip('/')
+
+
 async def _web_search_searxng(query: str, max_results: int = 5, timeout: int = 15) -> list[dict]:
     """Поиск в интернете через локальный SearXNG. Возвращает [{title, url, snippet, score}, ...]."""
     if not query or not query.strip():
@@ -142,14 +172,39 @@ async def _web_search_searxng(query: str, max_results: int = 5, timeout: int = 1
             data = resp.json()
             results = data.get("results", [])
             out = []
-            for item in results[:max_results]:
+            seen_urls = set()
+            for item in results:
+                title = (item.get("title") or "").strip()
+                url = _clean_url((item.get("url") or "").strip())
+                snippet = (item.get("content") or "").strip()
+                score = item.get("score", 1.0)
+
+                # Фильтр мусора
+                if not title or not snippet or len(snippet) < 20:
+                    continue
+                if _GARBAGE_TITLE_PATTERNS.search(title):
+                    continue
+                try:
+                    domain = url.split('/')[2] if '//' in url else url
+                except IndexError:
+                    continue
+                if domain in _GARBAGE_DOMAINS or any(d in url for d in ('youtube.com', 'facebook.com')):
+                    continue
+
+                # Дедупликация по URL
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+
                 out.append({
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "snippet": item.get("content", ""),
-                    "score": item.get("score", 1.0),
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "score": score,
                 })
-            logger.info(f"SearXNG search for '{query[:80]}': {len(out)} results")
+                if len(out) >= max_results:
+                    break
+            logger.info(f"SearXNG search for '{query[:80]}': {len(results)} raw → {len(out)} after filter+dedup")
             return out
     except httpx.ConnectError:
         logger.warning(f"SearXNG at {base_url} unavailable, falling back")
@@ -539,14 +594,19 @@ async def chat(body: dict):
         images_raw = r_item.get("images", [])
         images = [f"{SEARCH_SERVER_BASE}{img}" for img in images_raw] if images_raw else []
         page = r_item.get("page")
-        context_parts.append(f"[Source: {source} (product: {product}, score: {score})]\n{text}")
+        page_info = f" (стр. {page})" if page is not None else ""
+        context_parts.append(f"[Source: {source}{page_info}, product: {product}, score: {score}]\n{text}")
+        # Ссылка на конкретную страницу PDF (#page=N)
+        pdf_path = f"/docs/{urllib.parse.quote(source)}"
+        if page is not None:
+            pdf_path += f"#page={page}"
         rag_sources.append({
             "source": source,
             "product": product,
             "score": round(score, 3),
             "images": images,
             "page": page,
-            "pdf_url": f"/docs/{urllib.parse.quote(source)}",
+            "pdf_url": pdf_path,
         })
 
     if context_parts:
@@ -611,16 +671,19 @@ async def chat(body: dict):
         sources = rag_sources[:5]
 
     system_prompt = (
-        "Ты — технический ассистент поддержки. У тебя два источника информации:\n"
-        "1) Техническая документация (раздел «=== Техническая документация ===»).\n"
-        "2) Результаты веб-поиска (раздел «=== Результаты веб-поиска ===»).\n\n"
-        "Правила:\n"
-        "- Если в контексте есть раздел «=== Результаты веб-поиска ===», используй его как "
-        "приоритетный для актуальной информации (курсы, даты, события).\n"
-        "- Документацию используй для технических деталей.\n"
-        "- Всегда указывай источники: для документации — имя файла, для веба — URL.\n"
-        "- Если ответ можно дать только из одного источника — ссылайся на него.\n"
-        "- Выдавай максимально полную информацию."
+            "Ты — технический ассистент поддержки. У тебя два источника информации:\n"
+            "1) Техническая документация (раздел «=== Техническая документация ===»).\n"
+            "2) Результаты веб-поиска (раздел «=== Результаты веб-поиска ===»).\n\n"
+            "Правила:\n"
+            "- Если в контексте есть раздел «=== Результаты веб-поиска ===», используй его как "
+            "приоритетный для актуальной информации (курсы, даты, события).\n"
+            "- Документацию используй для технических деталей.\n"
+            "- Для каждого утверждения из документации указывай имя файла и номер страницы "
+            "в формате: «[имя_файла, стр. N]».\n"
+            "- Для каждого утверждения из веба указывай кликабельную ссылку "
+            "в формате: «[заголовок](url)».\n"
+            "- Если ответ можно дать из нескольких источников — укажи все.\n"
+            "- Выдавай максимально полную информацию."
     )
 
     user_content = f"Контекст:\n{context}\n\nВопрос: {question}"
