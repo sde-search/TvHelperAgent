@@ -29,6 +29,14 @@ import sys
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
 logger = logging.getLogger("tvhelper")
 
+# Монтируем PDF-документы для прямого доступа (кликабельные ссылки на источники)
+PDFS_DIR = Path(os.getenv("PDFS_DIR", "/home/hermes/share_pdf-rag/pdf-rag/data/pdfs"))
+if PDFS_DIR.exists():
+    app.mount("/docs", StaticFiles(directory=str(PDFS_DIR)), name="docs")
+    logger.info(f"PDF docs mounted at /docs/ from {PDFS_DIR}")
+else:
+    logger.warning(f"PDFS_DIR {PDFS_DIR} not found, /docs/ not mounted")
+
 # Подробный лог всех HTTP-запросов
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -538,6 +546,7 @@ async def chat(body: dict):
             "score": round(score, 3),
             "images": images,
             "page": page,
+            "pdf_url": f"/docs/{urllib.parse.quote(source)}",
         })
 
     if context_parts:
@@ -550,6 +559,9 @@ async def chat(body: dict):
         try:
             if search_backend == "tavily":
                 web_results = await _web_search(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
+                if not web_results:
+                    logger.info("Tavily вернул пусто, fallback → SearXNG")
+                    web_results = await _web_search_searxng(question, WEB_SEARCH_MAX_RESULTS, min(WEB_SEARCH_TIMEOUT, 10))
             else:
                 web_results = await _web_search_searxng(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
             if web_results:
@@ -566,6 +578,8 @@ async def chat(body: dict):
                     "score": round(wr.get("score", 1.0), 3),
                     "images": [],
                     "page": None,
+                    "url": wr.get("url", ""),
+                    "pdf_url": None,
                 } for wr in web_results]
                 logger.info(f"Web search added {len(web_results)} results")
         except Exception as e:
@@ -582,10 +596,10 @@ async def chat(body: dict):
         for p in rag_truncated:
             idx = p.find("\n", p.index("]") + 1) if "]" in p else -1
             if idx > 0:
-                head = p[:idx + 501]
-                body = head if len(p) < idx + 500 else head[:idx + 500] + "..."
+                head = p[:idx + 801]
+                body = head if len(p) < idx + 800 else head[:idx + 800] + "..."
             else:
-                body = p[:500]
+                body = p[:800]
             rag_short.append(body)
         parts.append("=== Техническая документация ===\n" + "\n\n---\n\n".join(rag_short))
     context = "\n\n".join(parts) if parts else "Нет релевантного контекста."
@@ -611,10 +625,22 @@ async def chat(body: dict):
 
     user_content = f"Контекст:\n{context}\n\nВопрос: {question}"
 
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-    if not history or history[-1].get("content") != question:
-        messages.append({"role": "user", "content": user_content})
+    # Ограничиваем историю до 3 последних оборотов (6 сообщений)
+    if len(history) > 6:
+        history = history[-6:]
+
+    if provider["type"] == "openai":
+        # OpenAI-провайдеры (deepseek и т.п.): контекст в system для лучшего восприятия
+        enhanced_system = system_prompt + f"\n\nКонтекст документации:\n{context}"
+        messages = [{"role": "system", "content": enhanced_system}]
+        messages.extend(history)
+        if not history or history[-1].get("content") != question:
+            messages.append({"role": "user", "content": f"Вопрос: {question}"})
+    else:
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history)
+        if not history or history[-1].get("content") != question:
+            messages.append({"role": "user", "content": user_content})
 
     # Динамический token budgeting: вычитаем размер входного промпта из num_ctx
     all_text = sum(len(m.get("content", "")) for m in messages)

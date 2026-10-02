@@ -178,6 +178,8 @@
             background: var(--bg); flex-shrink: 0;
         }
         .source-name { color: var(--accent); font-weight: 500; }
+        .source-link { color: var(--accent); font-weight: 500; text-decoration: underline; cursor: pointer; }
+        .source-link:hover { color: #fff; }
         .source-preview {
             display: none; margin-top: 4px; padding: 6px 8px;
             background: var(--bg); border-radius: 4px;
@@ -900,9 +902,22 @@
                 item.className = 'source-item';
                 const snippet = s.snippet ? escHtml(s.snippet.slice(0, 300)) : '';
                 const pageStr = s.page ? ` стр.${s.page}` : '';
+                // Build source link: RAG docs → /docs/filename, web → external URL
+                let sourceLink = '';
+                if (s.pdf_url) {
+                    sourceLink = s.pdf_url;
+                } else if (s.url) {
+                    sourceLink = s.url;
+                }
+                let sourceNameHtml = escHtml(s.source);
+                if (sourceLink) {
+                    sourceNameHtml = `<a href="${sourceLink}" target="_blank" class="source-link">${escHtml(s.source)}${pageStr}</a>`;
+                } else {
+                    sourceNameHtml = `<span class="source-name">${escHtml(s.source)}${pageStr}</span>`;
+                }
                 item.innerHTML = `
                     <span class="source-score">${s.score.toFixed(3)}</span>
-                    <span class="source-name">${escHtml(s.source)}${pageStr}</span>
+                    <span class="source-name">${sourceNameHtml}</span>
                     <span style="color:var(--text-dim);font-size:11px;">${escHtml(s.product)}</span>
                     <div class="source-preview">${snippet}</div>
                     <div class="source-images" style="display:none;margin-top:8px;"></div>
