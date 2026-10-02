@@ -71,6 +71,7 @@ WEB_SEARCH_ENABLED = os.getenv("WEB_SEARCH_ENABLED", "0")
 WEB_SEARCH_MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
 WEB_SEARCH_TIMEOUT = int(os.getenv("WEB_SEARCH_TIMEOUT", "15"))
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "http://127.0.0.1:8888")
 
 
 # === Web Search (Tavily API) ===
@@ -111,6 +112,44 @@ async def _web_search(query: str, max_results: int = 5, timeout: int = 15) -> li
     except Exception as e:
         logger.warning(f"Tavily search failed: {e}")
         return []
+
+
+# === Web Search (SearXNG) ===
+async def _web_search_searxng(query: str, max_results: int = 5, timeout: int = 15) -> list[dict]:
+    """Поиск в интернете через локальный SearXNG. Возвращает [{title, url, snippet, score}, ...]."""
+    if not query or not query.strip():
+        return []
+    base_url = SEARXNG_BASE_URL
+    try:
+        params = {
+            "q": query.strip(),
+            "format": "json",
+            "language": "ru",
+            "categories": "general",
+            "pageno": 1,
+        }
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            resp = await c.get(f"{base_url}/search", params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+            out = []
+            for item in results[:max_results]:
+                out.append({
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "snippet": item.get("content", ""),
+                    "score": item.get("score", 1.0),
+                })
+            logger.info(f"SearXNG search for '{query[:80]}': {len(out)} results")
+            return out
+    except httpx.ConnectError:
+        logger.warning(f"SearXNG at {base_url} unavailable, falling back")
+        return []
+    except Exception as e:
+        logger.warning(f"SearXNG search failed: {e}")
+        return []
+
 
 # === Провайдеры LLM ===
 PROVIDERS = []
@@ -446,7 +485,9 @@ async def chat(body: dict):
     num_predict = body.get("num_predict", DEFAULT_NUM_PREDICT)
     num_ctx = body.get("num_ctx", DEFAULT_NUM_CTX)
     history = body.get("history", [])
-    web_search_enabled = body.get("web_search", WEB_SEARCH_ENABLED == "1")
+    search_backend = body.get("search_backend", "tavily" if WEB_SEARCH_ENABLED == "1" else "off")
+    if search_backend not in ("tavily", "searxng", "off"):
+        search_backend = "off"
 
     if not question:
         return {"error": "Question is required"}
@@ -505,9 +546,12 @@ async def chat(body: dict):
     # === Web Search ===
     web_context = ""
     web_sources = []
-    if web_search_enabled:
+    if search_backend != "off":
         try:
-            web_results = await _web_search(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
+            if search_backend == "tavily":
+                web_results = await _web_search(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
+            else:
+                web_results = await _web_search_searxng(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
             if web_results:
                 web_parts = []
                 for wr in web_results:

@@ -275,26 +275,7 @@
         .btn-danger:hover:not(:disabled) { background: #f55; }
         .btn-sm { padding: 4px 10px; font-size: 11px; }
 
-        /* Web search toggle */
-        .toggle-label {
-            display: inline-flex; align-items: center; gap: 4px;
-            cursor: pointer; user-select: none; font-size: 11px; white-space: nowrap;
-        }
-        .toggle-label input[type="checkbox"] { display: none; }
-        .toggle-slider {
-            width: 28px; height: 14px; border-radius: 7px;
-            background: var(--bg-l2); position: relative; transition: background 0.2s;
-            border: 1px solid var(--border);
-        }
-        .toggle-slider::before {
-            content: ''; position: absolute; width: 10px; height: 10px;
-            border-radius: 50%; background: var(--text-dim); top: 1px; left: 1px;
-            transition: left 0.2s, background 0.2s;
-        }
-        .toggle-label input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
-        .toggle-label input:checked + .toggle-slider::before { left: 15px; background: #fff; }
-        .toggle-text { color: var(--text-dim); }
-        .toggle-label input:checked ~ .toggle-text { color: var(--text); }
+        /* Web search select */
 
         /* Empty state */
         .empty-state {
@@ -381,10 +362,12 @@
                 <span class="status-item" id="search-status"><span class="status-dot err"></span>Search</span>
                 <span class="status-item" id="vram-warning" style="display:none; background: rgba(255,100,50,.15); border-color: #f64;"><span class="status-dot err"></span>⚠️ VRAM</span>
             </div>
-            <label class="toggle-label" title="Включить веб-поиск — агент будет искать ответы в интернете">
-                <input type="checkbox" id="web-search-toggle" checked>
-                <span class="toggle-slider"></span>
-                <span class="toggle-text">🌐 Поиск</span>
+            <label class="toggle-label" title="Выбор поискового бэкенда для интернет-поиска">
+                <select id="search-backend-select" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;font-size:12px;cursor:pointer;">
+                    <option value="tavily">🌐 Tavily</option>
+                    <option value="searxng">🌐 SearXNG</option>
+                    <option value="off">🚫 Поиск выкл</option>
+                </select>
             </label>
             <button id="export-btn" class="btn btn-sm" title="Экспорт диалога">📥</button>
             <button id="files-btn" class="btn btn-sm" title="Список проиндексированных файлов">📁 Файлы</button>
@@ -573,7 +556,7 @@
         const tempVal = document.getElementById('temp-val');
         const tokensSlider = document.getElementById('tokens-slider');
         const tokensVal = document.getElementById('tokens-val');
-        const webSearchToggle = document.getElementById('web-search-toggle');
+        const searchBackendSelect = document.getElementById('search-backend-select');
 
         let abortController = null;
         let currentModel = '';
@@ -1059,7 +1042,7 @@
                         num_predict: numPredict,
                         num_ctx: parseInt(localStorage.getItem('tvhelper_num_ctx') || '8192', 10),
                         history: historyMsgs,
-                        web_search: webSearchToggle.checked,
+                        search_backend: searchBackendSelect.value,
                     }),
                     signal: abortController.signal,
                 });
