@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.INFO, stream=sys.stdout, force=True)
 logger = logging.getLogger("tvhelper")
 
 # Монтируем PDF-документы для прямого доступа (кликабельные ссылки на источники)
-PDFS_DIR = Path(os.getenv("PDFS_DIR", "/home/hermes/share_pdf-rag/pdf-rag/data/pdfs"))
+PDFS_DIR = Path(os.getenv("PDFS_DIR", str(Path(__file__).resolve().parent / "pdfs")))
 if PDFS_DIR.exists():
     app.mount("/docs", StaticFiles(directory=str(PDFS_DIR)), name="docs")
     logger.info(f"PDF docs mounted at /docs/ from {PDFS_DIR}")

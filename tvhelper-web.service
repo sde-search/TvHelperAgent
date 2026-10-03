@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/home/hermes/.hermes/profiles/tvhelper-web/.venv/bin/python3 /home/hermes/.hermes/profiles/tvhelper-web/app.py
+ExecStart=__TVHELPER_DIR__/.venv/bin/python3 __TVHELPER_DIR__/app.py
 Restart=on-failure
 RestartSec=5
 User=hermes
-WorkingDirectory=/home/hermes/.hermes/profiles/tvhelper-web
+WorkingDirectory=__TVHELPER_DIR__
 
 [Install]
 WantedBy=default.target

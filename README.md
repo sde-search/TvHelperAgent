@@ -33,7 +33,7 @@ cd ~/.hermes/profiles/tvhelper-web
 ```
 
 Сервер стартует на `http://0.0.0.0:8080`.
-Через WireGuard: `http://10.66.66.2:8080`
+Через WireGuard: `http://__HOST_IP__:8080` (проверить свой WG-адрес)
 
 Требуется работающий **Ollama** (`http://localhost:11434`) с моделью (`qwen3:8b`),
 и **search_server** для гибридного поиска (`http://localhost:11436`).
@@ -81,7 +81,7 @@ cloudflared tunnel --url http://localhost:8080
 
 ## PDF документы
 
-PDF-файлы монтируются на `/docs/` из `PDFS_DIR` (по умолч. `/home/hermes/share_pdf-rag/pdf-rag/data/pdfs/`).
+PDF-файлы монтируются на `/docs/` из `PDFS_DIR` (указывается в `.env` как `PDFS_DIR=/путь/к/pdfs`).
 В каждом RAG-источнике в ответе `/api/chat` есть поле `pdf_url` — ссылка на PDF с якорем `#page=N` для открытия на конкретной странице.
 
 Дедупликация при загрузке — по **SHA256** хешу содержимого. Если такой файл уже есть, возвращается 409.
