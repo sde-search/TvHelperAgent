@@ -576,9 +576,18 @@ async def chat(body: dict):
     # === RAG search ===
     rag_context = ""
     rag_sources = []
+    # Обогащаем RAG-запрос контекстом последнего вопроса из истории
+    rag_query = question
+    if history:
+        for msg in reversed(history):
+            if msg.get("role") == "user":
+                prev_q = msg["content"].strip()
+                if prev_q and prev_q != question:
+                    rag_query = f"{prev_q} {question}"
+                    break
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(SEARCH_URL, params={"query": question, "k": k})
+            r = await c.get(SEARCH_URL, params={"query": rag_query, "k": k})
             r.raise_for_status()
             search_data = r.json()
     except Exception as e:
@@ -612,18 +621,35 @@ async def chat(body: dict):
     if context_parts:
         rag_context = "\n\n---\n\n".join(context_parts)
 
-    # === Web Search ===
+    # === Веб-поиск с обогащением из RAG ===
+    # Сначала RAG: находим тему, потом ищем веб в контексте этой темы
     web_context = ""
     web_sources = []
+    enriched_query = question
+    if search_backend != "off" and rag_sources:
+        rag_terms = set()
+        for r_item in results[:5]:
+            product = r_item.get("product", "")
+            if product and len(product) > 2:
+                rag_terms.add(product)
+            source = r_item.get("source", "")
+            stem = source.replace(".pdf", "").replace(".PDF", "").replace("_", " ").replace("-", " ")
+            for term in stem.split():
+                term = term.strip()
+                if len(term) > 3 and term.lower() not in ("the", "and", "for", "with", "user", "guide", "edition", "manual", "document", "pdf", "version"):
+                    rag_terms.add(term)
+        if rag_terms:
+            enriched_query = f"{question} {' '.join(sorted(rag_terms))}"
+            logger.info(f"RAG-enriched web query: '{question}' → '{enriched_query[:120]}'")
     if search_backend != "off":
         try:
             if search_backend == "tavily":
-                web_results = await _web_search(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
+                web_results = await _web_search(enriched_query, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
                 if not web_results:
                     logger.info("Tavily вернул пусто, fallback → SearXNG")
-                    web_results = await _web_search_searxng(question, WEB_SEARCH_MAX_RESULTS, min(WEB_SEARCH_TIMEOUT, 10))
+                    web_results = await _web_search_searxng(enriched_query, WEB_SEARCH_MAX_RESULTS, min(WEB_SEARCH_TIMEOUT, 10))
             else:
-                web_results = await _web_search_searxng(question, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
+                web_results = await _web_search_searxng(enriched_query, WEB_SEARCH_MAX_RESULTS, WEB_SEARCH_TIMEOUT)
             if web_results:
                 web_parts = []
                 for wr in web_results:
@@ -641,40 +667,29 @@ async def chat(body: dict):
                     "url": wr.get("url", ""),
                     "pdf_url": None,
                 } for wr in web_results]
-                logger.info(f"Web search added {len(web_results)} results")
+                logger.info(f"Web search{' (enriched)' if rag_sources else ''} added {len(web_results)} results")
         except Exception as e:
             logger.warning(f"Web search error: {e}")
 
-    # === Собираем контекст вместе — с урезанием RAG если есть веб ===
-    # При веб-поиске берём не больше 2 чанков RAG, каждый до 500 символов
+    # === Собираем контекст: RAG приоритетный, веб — дополнительный ===
     parts = []
+    if rag_context:
+        parts.append("=== Техническая документация ===\n" + rag_context)
     if web_context:
         parts.append("=== Результаты веб-поиска ===\n" + web_context)
-    if rag_context:
-        rag_truncated = context_parts[:2] if web_context else context_parts
-        rag_short = []
-        for p in rag_truncated:
-            idx = p.find("\n", p.index("]") + 1) if "]" in p else -1
-            if idx > 0:
-                head = p[:idx + 801]
-                body = head if len(p) < idx + 800 else head[:idx + 800] + "..."
-            else:
-                body = p[:800]
-            rag_short.append(body)
-        parts.append("=== Техническая документация ===\n" + "\n\n---\n\n".join(rag_short))
     context = "\n\n".join(parts) if parts else "Нет релевантного контекста."
 
-    # sources для UI: объединяем RAG и Web, сначала RAG (PDF), потом Web
+    # sources для UI: RAG (PDF) всегда первыми, веб — после
     sources = rag_sources[:5] + web_sources[:5]
 
     system_prompt = (
             "Ты — технический ассистент поддержки. У тебя два источника информации:\n"
-            "1) Техническая документация (раздел «=== Техническая документация ===»).\n"
-            "2) Результаты веб-поиска (раздел «=== Результаты веб-поиска ===»).\n\n"
+            "1) Техническая документация (раздел «=== Техническая документация ===») — приоритетный источник.\n"
+            "2) Результаты веб-поиска (раздел «=== Результаты веб-поиска ===») — дополнительный источник.\n\n"
             "Правила:\n"
-            "- Если в контексте есть раздел «=== Результаты веб-поиска ===», используй его как "
-            "приоритетный для актуальной информации (курсы, даты, события).\n"
-            "- Документацию используй для технических деталей.\n"
+            "- ВСЕГДА сначала смотри в техническую документацию. Используй её как основной источник.\n"
+            "- Веб-результаты используй только для дополнения или актуализации (даты, события).\n"
+            "- Никогда не игнорируй документацию в пользу веба.\n"
             "- Для каждого утверждения из документации указывай имя файла и номер страницы "
             "в формате: «[имя_файла, стр. N]».\n"
             "- Для каждого утверждения из веба указывай кликабельную ссылку "
